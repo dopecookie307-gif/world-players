@@ -1,0 +1,28 @@
+World Players
+Copyright (c) 2026 dopecookie307-gif. All Rights Reserved.
+
+This repository is published publicly for learning and reference only.
+
+You may:
+  - read, study and learn from the source code;
+  - run the compiled mod for personal, non-commercial use.
+
+You may not, without prior written permission from the copyright holder:
+  - redistribute, re-upload, mirror or bundle the mod or its source code;
+  - publish modified versions, forks or derivative works;
+  - include any part of it in another project or in a modpack distributed publicly;
+  - use it commercially.
+
+The software is provided "as is", without warranty of any kind, express or implied,
+including but not limited to the warranties of merchantability, fitness for a
+particular purpose and noninfringement. In no event shall the authors or copyright
+holders be liable for any claim, damages or other liability, whether in an action of
+contract, tort or otherwise, arising from, out of or in connection with the software
+or the use or other dealings in the software.
+
+Third-party assets and APIs used at compile time (Jade, 3D Skin Layers, Chat Heads,
+JECharacters, PinIn) remain under their own licenses and are not part of this
+repository.
+
+For permissions, contact the author via the GitHub repository:
+https://github.com/dopecookie307-gif/world-players

@@ -48,6 +48,11 @@ dependencies {
 
     // Chat Heads：可选软依赖，只在编译期用；运行时先查 ModList 再加载联动类。
     compileOnly files('libs/chat_heads-api.jar')
+
+    // JEC（Just Enough Characters，通用拼音搜索）：可选软依赖，只在编译期用；
+    // 运行时先查 ModList 再加载兼容类，没装 JEC 就没有拼音搜索（不再自带硬编拼音表）。
+    compileOnly files('libs/jecharacters-4.5.30-api.jar')
+    compileOnly files('libs/pinin-1.6.0-api.jar')
 }
 
 tasks.withType(ProcessResources).configureEach {

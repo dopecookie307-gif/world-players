@@ -1,6 +1,9 @@
 {
   "replace": false,
   "values": [
-    "minecraft:iron_golem"
+    "minecraft:iron_golem",
+    { "id": "modulargolems:metal_golem", "required": false },
+    { "id": "modulargolems:humanoid_golem", "required": false },
+    { "id": "modulargolems:dog_golem", "required": false }
   ]
 }

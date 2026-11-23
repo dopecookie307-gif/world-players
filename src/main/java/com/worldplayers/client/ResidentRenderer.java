@@ -2,6 +2,8 @@ package com.worldplayers.client;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
 import com.worldplayers.WorldPlayers;
 import com.worldplayers.resident.ResidentEntity;
 import net.minecraft.client.model.HumanoidArmorModel;
@@ -17,7 +19,9 @@ import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
 import net.minecraft.client.renderer.entity.layers.ItemInHandLayer;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
@@ -84,6 +88,13 @@ public class ResidentRenderer extends LivingEntityRenderer<ResidentEntity, Playe
     @Override
     public void render(ResidentEntity entity, float entityYaw, float partialTick, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight) {
+        if (entity.modelType() == ResidentEntity.MODEL_YSM
+            && renderYsm(entity, partialTick, poseStack, buffer, packedLight)) {
+            // YSM 分支不走 super.render，RenderLivingEvent.Post 不会触发 —— 名牌/浮窗挂在那个事件上，
+            // 所以这里直接调名牌的绘制方法补上（主人 2026-11-21：YSM 居民也要有浮窗和名牌）。
+            ResidentNameplate.renderFor(entity, poseStack, buffer, packedLight);
+            return;
+        }
         int type = entity.modelType();
         boolean kid = type >= ResidentEntity.MODEL_KID_WIDE;
         boolean slim = type == ResidentEntity.MODEL_SLIM || type == ResidentEntity.MODEL_KID_SLIM;
@@ -109,6 +120,41 @@ public class ResidentRenderer extends LivingEntityRenderer<ResidentEntity, Playe
             applyHeldItemPose(entity);
             super.render(entity, entityYaw, partialTick, poseStack, actualBuffer, packedLight);
         }
+    }
+
+    /**
+     * YSM 模型渲染：完全走自己的几何，不经过 {@code PlayerModel}
+     * （所以手持物品 / 护甲 / 3D 皮肤层都不会画 —— 它们都挂在 PlayerModel 的部件上）。
+     *
+     * <p>几何或贴图加载失败时返回 false，调用方退回普通玩家模型。</p>
+     */
+    private boolean renderYsm(ResidentEntity entity, float partialTick, PoseStack poseStack,
+                              MultiBufferSource buffer, int packedLight) {
+        java.util.Optional<com.worldplayers.compat.ysm.YsmGeometry> geometry =
+            YsmGeometryCache.get(entity.ysmModel());
+        java.util.Optional<byte[]> texture =
+            com.worldplayers.compat.ysm.YsmModels.textureBytes(entity.ysmModel());
+        if (geometry.isEmpty() || texture.isEmpty()) {
+            return false;
+        }
+        ResourceLocation textureId = ClientSkins.skinFromBytes(texture.get(), "ysm_" + entity.ysmModel());
+        float bodyYaw = Mth.rotLerp(partialTick, entity.yBodyRotO, entity.yBodyRot);
+        poseStack.pushPose();
+        // YSM 几何的空间（见 YsmGeometry）是「y 向上、脚底 y=0、x 已镜像」——它和原版 PlayerModel 的
+        // 「y 向下、脚底 24 像素」空间正好差一个 scale(-1,-1,1)，而那条原版变换链里本来就有这个翻转，
+        // 两者相乘等于单位阵。所以这里只需要摆朝向 + 0.9375 缩放，不要再翻 x/y、也不要 translate(-1.501)。
+        poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - bodyYaw));
+        poseStack.scale(0.9375F, 0.9375F, 0.9375F);
+        VertexConsumer vertices = buffer.getBuffer(RenderType.entityCutoutNoCull(textureId));
+        int overlay = OverlayTexture.pack(0, OverlayTexture.v(entity.hurtTime > 0 || entity.deathTime > 0));
+        // 第 ④ 步：逐帧姿态（模型自带动画 + 每帧 Molang）；没有动画的模型退回第 ② 步的程序化动作
+        java.util.Map<String, YsmPose.BonePose> pose = YsmPose.compute(
+            entity, partialTick, YsmGeometryCache.animations(entity.ysmModel()));
+        // buffers 也传进去：手持物品要自己挂到手部骨骼上（原版 ItemInHandLayer 在 YSM 分支不会跑）
+        YsmModelRenderer.render(geometry.get(), pose, YsmAnim.of(entity, partialTick),
+            poseStack, vertices, buffer, packedLight, overlay, entity);
+        poseStack.popPose();
+        return true;
     }
 
     /**
@@ -174,6 +220,14 @@ public class ResidentRenderer extends LivingEntityRenderer<ResidentEntity, Playe
 
     @Override
     public ResourceLocation getTextureLocation(ResidentEntity entity) {
+        // Yes!SteveModel：用 YSM 模型自带的贴图（文件夹或 zip 里都能读）
+        if (entity.modelType() == ResidentEntity.MODEL_YSM) {
+            java.util.Optional<byte[]> texture =
+                com.worldplayers.compat.ysm.YsmModels.textureBytes(entity.ysmModel());
+            if (texture.isPresent()) {
+                return ClientSkins.skinFromBytes(texture.get(), "ysm_" + entity.ysmModel());
+            }
+        }
         return ClientSkins.skin(entity.skinName()).texture();
     }
 

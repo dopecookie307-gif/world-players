@@ -15,7 +15,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
  *
  * <p>一个包带三项，简单省事；GUI 关闭或选择变化时发一次。</p>
  */
-public record ResidentSettingsPayload(int entityId, String name, int model, String skin)
+public record ResidentSettingsPayload(int entityId, String name, int model, String skin, String ysm)
         implements CustomPacketPayload {
 
     public static final CustomPacketPayload.Type<ResidentSettingsPayload> TYPE =
@@ -27,6 +27,7 @@ public record ResidentSettingsPayload(int entityId, String name, int model, Stri
             ByteBufCodecs.STRING_UTF8, ResidentSettingsPayload::name,
             ByteBufCodecs.VAR_INT, ResidentSettingsPayload::model,
             ByteBufCodecs.STRING_UTF8, ResidentSettingsPayload::skin,
+            ByteBufCodecs.STRING_UTF8, ResidentSettingsPayload::ysm,
             ResidentSettingsPayload::new);
 
     @Override
@@ -43,13 +44,20 @@ public record ResidentSettingsPayload(int entityId, String name, int model, Stri
             if (!(entity instanceof ResidentEntity resident)) {
                 return;
             }
-            if (player.distanceToSqr(resident) > 64.0D) {
+            // 从手册成员列表点开的只读界面：不受 64 格距离限制（主人 2026-11-20，
+            // 之前站远了改名/换模型会静默失败，看起来"有的居民不能改"）
+            boolean remoteView = player.containerMenu instanceof com.worldplayers.menu.ResidentMenu menu
+                && menu.remote() && menu.resident() == resident;
+            if (!remoteView && player.distanceToSqr(resident) > 64.0D) {
                 return;
             }
             resident.setDisplayName(payload.name());
             resident.setModelType(payload.model());
             if (payload.skin() != null && !payload.skin().isBlank()) {
                 resident.setSkinName(payload.skin());
+            }
+            if (payload.ysm() != null) {
+                resident.setYsmModel(payload.ysm());
             }
         });
     }

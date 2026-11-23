@@ -23,3 +23,46 @@ type = "required"
 versionRange = "${minecraft_version_range}"
 ordering = "NONE"
 side = "BOTH"
+
+# ---------------------------------------------------------------------------
+# 软兼容（可选依赖）：全部要求"任意版本"，没装就完全不影响 World Players 本体。
+# 代码里也是先查 ModList 再加载兼容类（Jade 走它自己的 @WailaPlugin 扫描），
+# 所以这里只是把关系写明，供加载器和玩家查看，不构成硬性版本门槛。
+# ---------------------------------------------------------------------------
+
+[[dependencies.${mod_id}]]
+modId = "modulargolems"
+type = "optional"
+versionRange = "[0,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "jade"
+type = "optional"
+versionRange = "[0,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "chat_heads"
+type = "optional"
+versionRange = "[0,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "skinlayers3d"
+type = "optional"
+versionRange = "[0,)"
+ordering = "NONE"
+side = "CLIENT"
+
+# 通用拼音搜索（JEC）：可选；装了就用它的 PinIn 库做拼音搜索，没装不影响任何功能。
+[[dependencies.${mod_id}]]
+modId = "jecharacters"
+type = "optional"
+versionRange = "[0,)"
+ordering = "NONE"
+side = "CLIENT"
+

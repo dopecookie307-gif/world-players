@@ -28,6 +28,8 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
     private static final ResourceLocation TEXTURE = WorldPlayers.id("textures/gui/resident.png");
     private static final int WIDTH = ResidentMenu.IMAGE_WIDTH;
     private static final int HEIGHT = ResidentMenu.IMAGE_HEIGHT;
+    /** 只读模式只画到居民快捷栏下面（玩家背包区整块不显示）。 */
+    private static final int REMOTE_HEIGHT = 212;
 
     private static final int PREVIEW_X1 = 31;
     private static final int PREVIEW_Y1 = 7;
@@ -65,17 +67,20 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
     private static final int FOLDER_ICON_Y = IMPORT_ICON_Y + IMPORT_ICON_SIZE + 2;
 
     private static final int LIST_ITEM_H = 11;
-    private static final int LIST_VISIBLE = 8;
+    /** 可见行数：2026-11-22 主人要求 8 → 16（列表高 16×11+2 = 178，往下盖住背包区无妨，z=400 浮层）。 */
+    private static final int LIST_VISIBLE = 16;
     private static final int LIST_W = 72;
 
-    private static final String[] MODEL_LABELS = {"Wide", "Slim", "Kid-Wide", "Kid-Slim"};
+    private static final String[] MODEL_LABELS = {"Wide", "Slim", "Kid-Wide", "Kid-Slim", "Yes!SteveModel"};
 
     private EditBox nameBox;
     private Button modelButton;
     private Button skinButton;
 
-    private int selectedModel; // 0 = Wide, 1 = Slim
+    private int selectedModel; // 0 = Wide, 1 = Slim, 2 = Kid-Wide, 3 = Kid-Slim, 4 = Yes!SteveModel
     private String selectedSkin = "";
+    /** 选中 YSM 模型时的模型名（YSM 的「皮肤栏」就是这个）。 */
+    private String selectedYsm = "";
     /** 上一次从服务端看到的皮肤名：正版皮肤下载完服务端会改它，这里靠它把皮肤栏刷成新选择。 */
     private String lastResidentSkin = "";
 
@@ -90,13 +95,15 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
     public ResidentScreen(ResidentMenu menu, Inventory playerInventory, Component title) {
         super(menu, playerInventory, title);
         this.imageWidth = WIDTH;
-        this.imageHeight = HEIGHT;
+        // 只读查看（手册成员列表点开）不显示玩家背包：把界面截到居民区为止
+        this.imageHeight = menu.remote() ? REMOTE_HEIGHT : HEIGHT;
         this.inventoryLabelY = 100000;
         this.titleLabelX = 100000;
         ResidentEntity resident = menu.resident();
         if (resident != null) {
             this.selectedModel = Math.clamp(resident.modelType() - 1, 0, MODEL_LABELS.length - 1);
             this.selectedSkin = resident.skinName();
+            this.selectedYsm = resident.ysmModel();
             this.lastResidentSkin = resident.skinName();
         }
     }
@@ -140,11 +147,25 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
         this.addRenderableWidget(this.modelButton);
 
         this.skinButton = Button.builder(
-                skinLabel(this.selectedSkin),
+                skinOrYsmLabel(),
                 button -> this.toggleDropdown(Dropdown.SKIN))
             .bounds(this.leftPos + SKIN_BUTTON_X, this.topPos + SKIN_BUTTON_Y, BUTTON_W, BUTTON_H)
             .build();
         this.addRenderableWidget(this.skinButton);
+
+        // 流浪居民（没有床）：角色渲染正上方一个「分配床铺」按钮 → 进绑定床铺模式（主人 2026-11-20）
+        if (resident != null && !resident.hasBed()) {
+            Button assignButton = Button.builder(
+                    Component.translatable("gui.worldplayers.bed.assign"),
+                    button -> {
+                        BedBindMode.enterAssign(resident.getUUID());
+                        this.onClose();
+                    })
+                .bounds(this.leftPos + PREVIEW_X1, this.topPos + 1,
+                    PREVIEW_X2 - PREVIEW_X1, 12)
+                .build();
+            this.addRenderableWidget(assignButton);
+        }
     }
 
     /** 打勾：播放按钮音效、退出输入模式、立刻保存名字。 */
@@ -203,7 +224,7 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
             if (!currentSkin.equals(this.lastResidentSkin)) {
                 this.lastResidentSkin = currentSkin;
                 this.selectedSkin = currentSkin;
-                if (this.skinButton != null) {
+                if (this.skinButton != null && this.selectedModel != 4) {
                     this.skinButton.setMessage(skinLabel(currentSkin));
                 }
             }
@@ -218,7 +239,46 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
             this.renderDropdown(guiGraphics, mouseX, mouseY);
         }
         this.renderSkinImportIcon(guiGraphics, mouseX, mouseY);
+        // 只读查看模式：左上角一个 ← 回到成员列表（主人 2026-11-20）
+        if (this.menu.remote()) {
+            this.renderBackToList(guiGraphics, mouseX, mouseY);
+        }
         this.renderTooltip(guiGraphics, mouseX, mouseY);
+    }
+
+    /**
+     * 皮肤栏展开时干脆不画物品悬浮框：它画在鼠标旁边会盖住列表（2026-11-22 主人反馈）。
+     * 只读查看模式（remote）也走同一个方法，同样生效。
+     */
+    @Override
+    protected void renderTooltip(GuiGraphics guiGraphics, int mouseX, int mouseY) {
+        if (this.openDropdown != Dropdown.NONE) {
+            return;
+        }
+        super.renderTooltip(guiGraphics, mouseX, mouseY);
+    }
+
+    /** 只读查看时的返回按钮：画在 GUI 框外左上角。 */
+    private static final int BACK_SIZE = 12;
+
+    private int backX() {
+        return this.leftPos - BACK_SIZE - 4;
+    }
+
+    private int backY() {
+        return this.topPos - BACK_SIZE - 4;
+    }
+
+    private void renderBackToList(GuiGraphics gui, int mouseX, int mouseY) {
+        int x = backX();
+        int y = backY();
+        boolean hovered = mouseX >= x && mouseX <= x + BACK_SIZE && mouseY >= y && mouseY <= y + BACK_SIZE;
+        gui.fill(x, y, x + BACK_SIZE, y + BACK_SIZE, hovered ? 0xFF9A9A9A : 0xFF6E6E6E);
+        int glyph = 0xFFFFFFFF;
+        gui.fill(x + 3, y + 5, x + 9, y + 7, glyph);
+        gui.fill(x + 3, y + 4, x + 5, y + 8, glyph);
+        gui.fill(x + 4, y + 3, x + 6, y + 5, glyph);
+        gui.fill(x + 4, y + 7, x + 6, y + 9, glyph);
     }
 
     /** 框外右侧两个图标：铁胸甲 = 正版账号皮肤；金镐子 = 打开自定义皮肤文件夹。 */
@@ -305,7 +365,20 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
         if (this.openDropdown == Dropdown.MODEL) {
             return List.of(MODEL_LABELS);
         }
+        // 选中 Yes!SteveModel 时，皮肤栏变成「YSM 模型」栏位
+        if (this.selectedModel == 4) {
+            List<String> ysm = com.worldplayers.compat.ysm.YsmModels.names();
+            return ysm.isEmpty() ? List.of("（没找到 YSM 模型）") : ysm;
+        }
         return ResidentSkins.all();
+    }
+
+    /** 皮肤 / YSM 栏位按钮的文字。 */
+    private Component skinOrYsmLabel() {
+        if (this.selectedModel == 4) {
+            return Component.literal(this.selectedYsm.isEmpty() ? "Yes!SteveModel" : this.selectedYsm);
+        }
+        return skinLabel(this.selectedSkin);
     }
 
     private int visibleItems() {
@@ -397,6 +470,17 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 只读查看：左上角 ← 回成员列表
+        if (this.menu.remote() && button == 0) {
+            int bx = backX();
+            int by = backY();
+            if (mouseX >= bx && mouseX <= bx + BACK_SIZE && mouseY >= by && mouseY <= by + BACK_SIZE) {
+                this.minecraft.getSoundManager().play(
+                    SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK.value(), 1.0F));
+                ManualScreen.openMembers();
+                return true;
+            }
+        }
         if (this.openDropdown != Dropdown.NONE) {
             List<String> entries = this.dropdownEntries();
             int x = this.listX();
@@ -500,6 +584,16 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
+    /** 只读查看模式：所有背包槽都不可点（看得见、拿不走）。 */
+    @Override
+    protected void slotClicked(net.minecraft.world.inventory.Slot slot, int slotId, int mouseButton,
+                               net.minecraft.world.inventory.ClickType type) {
+        if (this.menu.remote()) {
+            return;
+        }
+        super.slotClicked(slot, slotId, mouseButton, type);
+    }
+
     private void updateScrollFromMouse(double mouseY, int y, int h) {
         int trackH = Math.max(1, h - 2);
         float ratio = (float) ((mouseY - y - 1) / trackH);
@@ -519,6 +613,20 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
         if (this.openDropdown == Dropdown.MODEL) {
             this.selectedModel = index;
             this.modelButton.setMessage(modelLabel(index));
+            if (index == 4 && this.selectedYsm.isEmpty()) {
+                // 选 Yes!SteveModel：随机挑一个 YSM 模型
+                com.worldplayers.compat.ysm.YsmModels.random(this.minecraft.font.random)
+                    .ifPresentOrElse(name -> this.selectedYsm = name, () -> this.selectedYsm = "");
+            }
+            if (this.skinButton != null) {
+                this.skinButton.setMessage(skinOrYsmLabel());
+            }
+        } else if (this.selectedModel == 4) {
+            // YSM 栏位：选的是模型名
+            if (!value.startsWith("（")) {
+                this.selectedYsm = value;
+            }
+            this.skinButton.setMessage(skinOrYsmLabel());
         } else {
             this.selectedSkin = value;
             this.skinButton.setMessage(skinLabel(value));
@@ -538,7 +646,8 @@ public class ResidentScreen extends AbstractContainerScreen<ResidentMenu> {
         }
         String name = this.nameBox != null ? this.nameBox.getValue() : "";
         PacketDistributor.sendToServer(
-            new ResidentSettingsPayload(resident.getId(), name, this.selectedModel + 1, this.selectedSkin));
+            new ResidentSettingsPayload(resident.getId(), name, this.selectedModel + 1,
+                this.selectedSkin, this.selectedYsm));
     }
 
     @Override

@@ -43,14 +43,20 @@ public final class ResidentChatHeads {
     private static final Map<String, PlayerSkin> SKINS = new HashMap<>();
     private static final List<Pending> PENDING = new ArrayList<>();
     private static Field trimmedMessagesField;
+    /** 运行时出错（对方版本变了 / 字段没了）就整体停用，绝不在聊天里刷屏、更不让游戏崩。 */
+    private static boolean disabled;
 
     /** 等待"消息真的进了聊天栏"的补丁请求。 */
     private static final class Pending {
+        /** 完整显示文本（用来和行内容精确配对，避免同名的两条消息互相抢行）。 */
+        private final String text;
+        /** `<名字>` 前缀（多行消息被裁切时兜底）。 */
         private final String prefix;
         private final HeadData headData;
         private int ticksLeft;
 
-        private Pending(String prefix, HeadData headData, int ticksLeft) {
+        private Pending(String text, String prefix, HeadData headData, int ticksLeft) {
+            this.text = text;
             this.prefix = prefix;
             this.headData = headData;
             this.ticksLeft = ticksLeft;
@@ -65,31 +71,59 @@ public final class ResidentChatHeads {
 
     /** 系统聊天到达时（原版 addMessage 之前）：顺手给个 fallback，再排队一次"行级补丁"。 */
     private static void onSystemChat(ClientChatReceivedEvent.System event) {
+        if (disabled) {
+            return;
+        }
+        try {
+            handleSystemChat(event);
+        } catch (Throwable incompatible) {
+            disable(incompatible);
+        }
+    }
+
+    private static void handleSystemChat(ClientChatReceivedEvent.System event) {
         Component message = event.getMessage();
         String insertion = message.getStyle() == null ? null : message.getStyle().getInsertion();
         if (insertion == null || !insertion.startsWith(MARK)) {
             return;
         }
-        String skinName = insertion.substring(MARK.length());
-        PlayerSkin skin = skinFor(skinName);
+        String payload = insertion.substring(MARK.length());
+        int bar = payload.indexOf('|');
+        String skinName = bar < 0 ? payload : payload.substring(0, bar);
+        String model = bar < 0 ? "" : payload.substring(bar + 1);
+        PlayerSkin skin = skinFor(skinName, model);
         if (skin == null) {
             return;
         }
-        HeadData headData = new HeadData(headInfo(skinName, skin), 1);
+        HeadData headData = new HeadData(headInfo(skinName.isEmpty() ? model : skinName, skin), 1);
         // fallback：如果 Chat Heads 这次没有覆盖，用它自己那条路也能出图
         ChatHeads.lastSenderData = headData;
+        // 双保险：聊天行是「之后」才创建的，先在 lineData 里放好，行一出生就带头像
+        try {
+            ChatHeads.setLineData(headData);
+        } catch (Throwable ignored) {
+            // 旧版本没有这个入口时无声降级，主路径（行级写入）仍然有效
+        }
 
         // 主路径：记下这一行的开头，等它真的进了 trimmedMessages 再写头像
         String text = message.getString();
         int end = text.indexOf('>');
         String prefix = end > 0 ? text.substring(0, end + 1) : text;
-        PENDING.add(new Pending(prefix, headData, 4));
+        PENDING.add(new Pending(text, prefix, headData, 4));
     }
 
     private static void onClientTick(ClientTickEvent.Post event) {
-        if (PENDING.isEmpty()) {
+        if (disabled || PENDING.isEmpty()) {
             return;
         }
+        try {
+            handleClientTick();
+        } catch (Throwable incompatible) {
+            disable(incompatible);
+        }
+    }
+
+    private static void handleClientTick() {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.gui == null) {
             return;
@@ -100,18 +134,54 @@ public final class ResidentChatHeads {
             PENDING.clear();
             return;
         }
+        // 2026-11-23 修「被指派工作时的回应没有头像」：
+        // 员工被指派时通常会连说两句（「我这就前往…」+ 流浪台词），两行的 `<名字>` 前缀一样，
+        // 以前按前缀匹配，后到的那行先把两条 PENDING 都认领了，第一句就永远没有头像。
+        // 现在先按**完整文本**配对，并记录本 tick 已被认领的行，一条 PENDING 只吃一行。
+        List<String> plainLines = new ArrayList<>(lines.size());
+        for (GuiMessage.Line line : lines) {
+            plainLines.add(plain(line.content()));
+        }
+        java.util.Set<Integer> claimedIndex = new java.util.HashSet<>();
         PENDING.removeIf(pending -> {
-            for (GuiMessage.Line line : lines) {
-                if (!plain(line.content()).startsWith(pending.prefix)) {
-                    continue;
-                }
-                if (applyHead(line, pending.headData)) {
-                    return true;
+            int match = -1;
+            // 1) 完整文本相等（同名多句时唯一正确的配对）
+            for (int i = 0; i < plainLines.size() && match < 0; i++) {
+                if (!claimedIndex.contains(i) && plainLines.get(i).equals(pending.text)) {
+                    match = i;
                 }
             }
-            pending.ticksLeft--;
-            return pending.ticksLeft <= 0;
+            // 2) 行是完整文本的前缀（长消息被聊天栏裁成多行时的第一行）
+            for (int i = 0; i < plainLines.size() && match < 0; i++) {
+                if (!claimedIndex.contains(i) && !plainLines.get(i).isEmpty()
+                        && pending.text.startsWith(plainLines.get(i))) {
+                    match = i;
+                }
+            }
+            // 3) 最后退回 `<名字>` 前缀
+            for (int i = 0; i < plainLines.size() && match < 0; i++) {
+                if (!claimedIndex.contains(i) && plainLines.get(i).startsWith(pending.prefix)) {
+                    match = i;
+                }
+            }
+            if (match < 0) {
+                pending.ticksLeft--;
+                return pending.ticksLeft <= 0;
+            }
+            claimedIndex.add(match);
+            applyHead(lines.get(match), pending.headData);
+            return true;
         });
+    }
+
+    /** 一次性关掉联动（版本不兼容 / 反射失败时）：只警告一次，之后完全静默。 */
+    private static void disable(Throwable cause) {
+        if (disabled) {
+            return;
+        }
+        disabled = true;
+        PENDING.clear();
+        WorldPlayers.LOGGER.warn("World Players: Chat Heads 接口与当前版本不兼容，居民聊天头像已停用", cause);
     }
 
     @SuppressWarnings("unchecked")
@@ -152,9 +222,17 @@ public final class ResidentChatHeads {
         return builder.toString();
     }
 
-    private static PlayerSkin skinFor(String skinName) {
-        if (SKINS.containsKey(skinName)) {
-            return SKINS.get(skinName);
+    private static PlayerSkin skinFor(String skinName, String model) {
+        String key = skinName + "|" + model;
+        if (SKINS.containsKey(key)) {
+            return SKINS.get(key);
+        }
+        if (!model.isEmpty()) {
+            PlayerSkin ysm = ysmSkin(model);
+            if (ysm != null) {
+                SKINS.put(key, ysm);
+                return ysm;
+            }
         }
         ClientSkins.Skin base = ClientSkins.skin(skinName);
         PlayerSkin skin;
@@ -184,8 +262,46 @@ public final class ResidentChatHeads {
             Minecraft.getInstance().getTextureManager().register(id, new DynamicTexture(merged));
             skin = new PlayerSkin(id, null, null, null, PlayerSkin.Model.WIDE, true);
         }
-        SKINS.put(skinName, skin);
+        SKINS.put(key, skin);
         return skin;
+    }
+
+    /**
+     * 用 YSM 模型的贴图做头像。
+     *
+     * <p>YSM 是 Bedrock 布局，但**头部 32×16 区域和原版皮肤同一位置**（脸在 (8,8)），
+     * 所以只要把这块拷进一张 64×64 的皮肤图、再把脸写进帽子层 (40,8)，Chat Heads 就能照常取头。
+     * 这样即使居民的皮肤名为空（换成 YSM 模型后常见），也一定有头像。</p>
+     */
+    private static PlayerSkin ysmSkin(String model) {
+        try {
+            java.util.Optional<byte[]> bytes = com.worldplayers.compat.ysm.YsmModels.textureBytes(model);
+            if (bytes.isEmpty()) {
+                return null;
+            }
+            NativeImage source = NativeImage.read(new java.io.ByteArrayInputStream(bytes.get()));
+            if (source.getWidth() < 32 || source.getHeight() < 16) {
+                source.close();
+                return null;
+            }
+            NativeImage head = new NativeImage(64, 64, true);
+            for (int y = 0; y < 16; y++) {
+                for (int x = 0; x < 32; x++) {
+                    head.setPixelRGBA(x, y, source.getPixelRGBA(x, y));
+                }
+            }
+            for (int y = 0; y < 8; y++) {
+                for (int x = 0; x < 8; x++) {
+                    head.setPixelRGBA(40 + x, 8 + y, source.getPixelRGBA(8 + x, 8 + y));
+                }
+            }
+            source.close();
+            ResourceLocation id = WorldPlayers.id("chat_head/ysm_" + safe(model));
+            Minecraft.getInstance().getTextureManager().register(id, new DynamicTexture(head));
+            return new PlayerSkin(id, null, null, null, PlayerSkin.Model.WIDE, true);
+        } catch (Throwable broken) {
+            return null;
+        }
     }
 
     private static PlayerInfo headInfo(String skinName, PlayerSkin skin) {

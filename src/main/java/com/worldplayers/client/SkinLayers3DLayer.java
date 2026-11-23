@@ -26,6 +26,8 @@ import net.minecraft.client.renderer.entity.layers.RenderLayer;
  */
 public class SkinLayers3DLayer extends RenderLayer<ResidentEntity, PlayerModel<ResidentEntity>> {
     private final Map<String, Meshes> cache = new HashMap<>();
+    /** 渲染阶段一旦出错（对方 API 版本变了）就停用本层，只警告一次，绝不每帧刷屏/崩客户端。 */
+    private boolean failed;
 
     private record Meshes(Mesh head, Mesh torso, Mesh leftArm, Mesh rightArm, Mesh leftLeg, Mesh rightLeg) {
     }
@@ -38,6 +40,20 @@ public class SkinLayers3DLayer extends RenderLayer<ResidentEntity, PlayerModel<R
     public void render(PoseStack poseStack, MultiBufferSource buffer, int light, ResidentEntity entity,
                        float limbSwing, float limbSwingAmount, float partialTick, float ageInTicks,
                        float netHeadYaw, float headPitch) {
+        if (this.failed) {
+            return;
+        }
+        try {
+            renderLayers(poseStack, buffer, light, entity);
+        } catch (Throwable incompatible) {
+            this.failed = true;
+            this.cache.clear();
+            com.worldplayers.WorldPlayers.LOGGER.warn(
+                "World Players: 3D Skin Layers 接口与当前版本不兼容，居民改用平面皮肤", incompatible);
+        }
+    }
+
+    private void renderLayers(PoseStack poseStack, MultiBufferSource buffer, int light, ResidentEntity entity) {
         if (entity.isInvisible()) {
             return;
         }

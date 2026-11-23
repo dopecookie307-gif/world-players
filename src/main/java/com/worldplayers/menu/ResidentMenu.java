@@ -40,24 +40,41 @@ public class ResidentMenu extends AbstractContainerMenu {
     @Nullable
     private final ResidentEntity resident;
     private final Container residentContainer;
+    /** 只读查看（从手册成员列表点开）：不加玩家背包槽、槽位不可编辑、不冻结居民 AI。 */
+    private final boolean remote;
 
     public ResidentMenu(int containerId, Inventory playerInventory, @Nullable ResidentEntity resident) {
+        this(containerId, playerInventory, resident, false);
+    }
+
+    public ResidentMenu(int containerId, Inventory playerInventory, @Nullable ResidentEntity resident,
+                        boolean remote) {
         super(WPMenus.RESIDENT.get(), containerId);
         this.resident = resident;
+        this.remote = remote;
         this.residentContainer = resident != null ? resident.inventory() : new SimpleContainer(ResidentInventory.SIZE);
 
         this.addResidentSlots();
-        this.addPlayerSlots(playerInventory);
+        if (!remote) {
+            this.addPlayerSlots(playerInventory);
+        }
 
-        if (resident != null && playerInventory.player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+        if (!remote && resident != null
+                && playerInventory.player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
             resident.startViewing(serverPlayer);
         }
+    }
+
+    /** 是否只读查看模式（手册点开的那种）。 */
+    public boolean remote() {
+        return this.remote;
     }
 
     @Override
     public void removed(Player player) {
         super.removed(player);
-        if (this.resident != null && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+        if (!this.remote && this.resident != null
+                && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
             this.resident.stopViewing(serverPlayer);
         }
     }
@@ -65,12 +82,12 @@ public class ResidentMenu extends AbstractContainerMenu {
     private void addResidentSlots() {
         // 快捷栏（0 号 = 主手）
         for (int col = 0; col < 9; col++) {
-            this.addSlot(new Slot(this.residentContainer, col, HOTBAR_X + col * SLOT, HOTBAR_Y));
+            this.addSlot(this.plainSlot(col, HOTBAR_X + col * SLOT, HOTBAR_Y));
         }
         // 主背包 3 行
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
-                this.addSlot(new Slot(this.residentContainer, 9 + row * 9 + col,
+                this.addSlot(this.plainSlot(9 + row * 9 + col,
                     HOTBAR_X + col * SLOT, BACKPACK_Y + row * SLOT));
             }
         }
@@ -80,11 +97,19 @@ public class ResidentMenu extends AbstractContainerMenu {
         };
         for (int i = 0; i < armor.length; i++) {
             this.addSlot(new EquipmentSlotLimit(this.residentContainer, ResidentInventory.ARMOR_START + i,
-                armor[i], EQUIP_X, EQUIP_Y + i * SLOT));
+                armor[i], EQUIP_X, EQUIP_Y + i * SLOT, this.remote));
         }
         // 副手
         this.addSlot(new EquipmentSlotLimit(this.residentContainer, ResidentInventory.OFFHAND,
-            EquipmentSlot.OFFHAND, EQUIP_X, OFFHAND_Y));
+            EquipmentSlot.OFFHAND, EQUIP_X, OFFHAND_Y, this.remote));
+    }
+
+    /** 普通背包槽；只读模式下换成不可拿不可放的槽。 */
+    private Slot plainSlot(int index, int x, int y) {
+        if (this.remote) {
+            return new ReadOnlySlot(this.residentContainer, index, x, y);
+        }
+        return new Slot(this.residentContainer, index, x, y);
     }
 
     private void addPlayerSlots(Inventory playerInventory) {
@@ -109,11 +134,18 @@ public class ResidentMenu extends AbstractContainerMenu {
         if (this.resident == null || this.resident.isRemoved()) {
             return false;
         }
+        // 只读查看是从手册点开的，允许隔远一点看
+        if (this.remote) {
+            return true;
+        }
         return player.distanceToSqr(this.resident) <= 64.0D;
     }
 
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
+        if (this.remote) {
+            return ItemStack.EMPTY;
+        }
         Slot slot = this.slots.get(index);
         if (!slot.hasItem()) {
             return ItemStack.EMPTY;
@@ -147,17 +179,45 @@ public class ResidentMenu extends AbstractContainerMenu {
         return original;
     }
 
-    /** 只接受能放进该装备槽的物品。 */
-    private static final class EquipmentSlotLimit extends Slot {
-        private final EquipmentSlot equipmentSlot;
-
-        EquipmentSlotLimit(Container container, int index, EquipmentSlot equipmentSlot, int x, int y) {
+    /** 只读槽：看得见、拿不走、放不进。 */
+    private static final class ReadOnlySlot extends Slot {
+        ReadOnlySlot(Container container, int index, int x, int y) {
             super(container, index, x, y);
-            this.equipmentSlot = equipmentSlot;
+        }
+
+        @Override
+        public boolean mayPickup(Player player) {
+            return false;
         }
 
         @Override
         public boolean mayPlace(ItemStack stack) {
+            return false;
+        }
+    }
+
+    /** 只接受能放进该装备槽的物品。 */
+    private static final class EquipmentSlotLimit extends Slot {
+        private final EquipmentSlot equipmentSlot;
+        private final boolean readOnly;
+
+        EquipmentSlotLimit(Container container, int index, EquipmentSlot equipmentSlot, int x, int y,
+                           boolean readOnly) {
+            super(container, index, x, y);
+            this.equipmentSlot = equipmentSlot;
+            this.readOnly = readOnly;
+        }
+
+        @Override
+        public boolean mayPickup(Player player) {
+            return !this.readOnly;
+        }
+
+        @Override
+        public boolean mayPlace(ItemStack stack) {
+            if (this.readOnly) {
+                return false;
+            }
             // 副手像玩家一样什么都能放；盔甲槽只收对应部位
             if (this.equipmentSlot == EquipmentSlot.OFFHAND) {
                 return true;

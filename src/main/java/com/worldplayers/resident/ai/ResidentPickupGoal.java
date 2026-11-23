@@ -52,10 +52,35 @@ public class ResidentPickupGoal extends Goal {
                 item -> item.isAlive()
                     && item.getAge() >= PICKUP_DELAY_TICKS
                     && this.resident.canPickupNow(item)
-                    && this.resident.inventory().canAccept(item.getItem()))
+                    && this.resident.inventory().canAccept(item.getItem())
+                    && this.insideWorkZoneIfWorking(item))
             .stream()
             .min(Comparator.comparingDouble(this.resident::distanceToSqr))
             .orElse(null);
+    }
+
+    /**
+     * 2026-11-23 三修：员工在工作时间里，只捡**工作区内**的东西。
+     *
+     * <p>这个 goal 优先级 4，比工作 goal（5）还高，以前会被区域外一格的小麦 / 种子牵着走出去
+     * （玩家看到的就是「工作期间跑出工作区」）。通勤途中、非工作阶段不受影响。</p>
+     */
+    private boolean insideWorkZoneIfWorking(ItemEntity item) {
+        if (!(this.resident.level() instanceof net.minecraft.server.level.ServerLevel level)) {
+            return true;
+        }
+        if (!this.resident.schedule().isWorkPhase()) {
+            return true;
+        }
+        com.worldplayers.resident.WorkZone zone =
+            com.worldplayers.resident.WorkZoneData.get(level)
+                .findByEmployee(this.resident.getUUID().toString());
+        if (zone == null || zone.isProject() || zone.isEntertainment()
+                || !zone.containsBody(this.resident)) {
+            return true;
+        }
+        net.minecraft.core.BlockPos pos = item.blockPosition();
+        return zone.containsBlock(pos) || zone.containsBlock(pos.below());
     }
 
     @Override

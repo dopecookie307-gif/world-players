@@ -36,6 +36,20 @@ public final class WorldPlayersClient {
         }
     }
 
+    /** 资源重载（换语言 / 加载模组资源）：填充方块搜索的名字缓存要重建（规格 4.1）。 */
+    @SubscribeEvent
+    public static void registerReloadListeners(
+            net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent event) {
+        event.registerReloadListener(
+            new net.minecraft.server.packs.resources.ResourceManagerReloadListener() {
+                @Override
+                public void onResourceManagerReload(
+                        net.minecraft.server.packs.resources.ResourceManager resourceManager) {
+                    BlockSearch.invalidate();
+                }
+            });
+    }
+
     private WorldPlayersClient() {
     }
 }

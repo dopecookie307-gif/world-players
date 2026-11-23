@@ -67,37 +67,69 @@ public final class ResidentNameplate {
         if (!(event.getEntity() instanceof ResidentEntity resident)) {
             return;
         }
-        Component custom = resident.getCustomName();
-        boolean hasName = custom != null && !custom.getString().isBlank();
+        draw(resident, event.getPoseStack(), event.getMultiBufferSource(), event.getPackedLight());
+    }
+
+    /**
+     * YSM 模型分支不走 {@code super.render}（→ {@code RenderLivingEvent.Post} 不会触发），
+     * 由 {@code ResidentRenderer} 在 YSM 渲染完之后直接调这个补画名牌/浮窗（主人 2026-11-21：YSM 居民也要有）。
+     */
+    public static void renderFor(ResidentEntity resident, PoseStack poseStack, MultiBufferSource buffer,
+                                 int packedLight) {
+        draw(resident, poseStack, buffer, packedLight);
+    }
+
+    private static void draw(ResidentEntity resident, PoseStack poseStack, MultiBufferSource buffer,
+                             int packedLight) {
+        // 主人 2026-11-23：名字牌 / 状态浮窗的渲染极限距离 = 64 格，再远就不画
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null || minecraft.player.distanceToSqr(resident)
+                > ClientDisplay.NAMEPLATE_RANGE * ClientDisplay.NAMEPLATE_RANGE) {
+            return;
+        }
+        Component custom = com.worldplayers.resident.ResidentDisplayNames.displayOrNull(resident);
+        boolean hasName = custom != null;
         boolean card = ClientDisplay.showNameplate(resident);
-        if (!card && !hasName) {
+        // 手持「可喂食居民」物品（金苹果等）：所有居民的名字牌变成「右键喂食」（主人 2026-11-20）
+        boolean feedHint = Minecraft.getInstance().player != null
+            && Minecraft.getInstance().player.getMainHandItem()
+                .is(com.worldplayers.registry.WPItems.FEEDABLE_RESIDENT);
+        if (!card && !hasName && !feedHint) {
             return;
         }
 
-        PoseStack poseStack = event.getPoseStack();
         poseStack.pushPose();
         poseStack.translate(0.0D, anchorY(resident), 0.0D);
         poseStack.mulPose(Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation());
         poseStack.scale(SCALE, -SCALE, SCALE);
 
         // 状态浮窗永远全亮；普通名字牌跟随实体光照（主人要求：不发光）
-        int light = card ? LightTexture.FULL_BRIGHT : event.getPackedLight();
+        int light = card ? LightTexture.FULL_BRIGHT : packedLight;
 
         // 防御：别的渲染可能把 shader 颜色压暗过（受伤闪红之类），画之前恢复纯白
         RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 
+        if (feedHint) {
+            // 只画一句金色提示，状态卡不抢位置
+            renderNameOnly(Component.translatable("gui.worldplayers.feed_hint"),
+                poseStack, buffer, light, 0xFFFFD24A);
+            poseStack.popPose();
+            return;
+        }
+
         if (card) {
-            renderCard(resident, hasName ? custom : null, poseStack, event.getMultiBufferSource(), light);
+            renderCard(resident, hasName ? custom : null, poseStack, buffer, light);
         } else {
-            renderNameOnly(custom, poseStack, event.getMultiBufferSource(), light);
+            renderNameOnly(custom, poseStack, buffer, light, 0xFFFFFFFF);
         }
         poseStack.popPose();
     }
 
-    private static void renderNameOnly(Component name, PoseStack poseStack, MultiBufferSource buffer, int light) {
+    private static void renderNameOnly(Component name, PoseStack poseStack, MultiBufferSource buffer,
+                                       int light, int color) {
         Font font = Minecraft.getInstance().font;
         int width = font.width(name);
-        font.drawInBatch(name, -width / 2.0F, 0.0F, 0xFFFFFFFF, false, poseStack.last().pose(),
+        font.drawInBatch(name, -width / 2.0F, 0.0F, color, false, poseStack.last().pose(),
             buffer, MODE, 0x40000000, light);
     }
 
@@ -106,30 +138,48 @@ public final class ResidentNameplate {
         Font font = Minecraft.getInstance().font;
         Matrix4f matrix = poseStack.last().pose();
 
-        Component jobLine = jobText(entity.jobKey());
+        Component jobLine = jobText(entity.displayJobKey());
+        // 「工作状态下面」要显示的内容：通勤 / 前往娱乐（闲逛）时显示目的地名字
+        // （农作时不显示工作区名，主人 2026-11-20；前往娱乐区的闲逛要显示，主人 2026-11-23）
+        java.util.List<Component> extraLines = new java.util.ArrayList<>();
+        String displayJob = entity.displayJobKey();
+        boolean goingSomewhere = ResidentJobs.COMMUTE.equals(displayJob)
+            || ResidentJobs.STROLLING.equals(displayJob);
+        if (goingSomewhere && !entity.destinationKey().isEmpty()) {
+            extraLines.add(entity.destinationText());
+        }
         float moodPercent = entity.mood();
 
         float nameWidth = customName == null ? 0.0F : font.width(customName);
         float titleWidth = customName == null
             ? FACE_SIZE
             : nameWidth + FACE_GAP + FACE_SIZE;
+        // 卡片宽度只由「最宽的那一行」决定：多字数只会让浮窗横向变宽，绝不向上顶（主人 2026-11-20）
         float content = Math.max(titleWidth, font.width(jobLine) + PAD_X + BAR_W);
+        for (Component line : extraLines) {
+            content = Math.max(content, font.width(line) + PAD_X * 2.0F);
+        }
         float cardW = content + PAD_X * 2.0F;
-        float cardH = LINE + PAD_Y * 2.0F + BAR_GAP * 2.0F + BAR_H * 3.0F - 1.0F;
+
+        // 垂直布局：名字行 → 工作状态行（文字与三条状态条**同一高度**）→ 附加内容行（在状态条下面）
+        float statusTop = PAD_Y + LINE;                  // 相对 top
+        float statusBlock = BAR_GAP * 2.0F + BAR_H;      // 三条状态条占的高度
+        float extraTop = statusTop + statusBlock + 1.0F; // 第一条附加内容的 y
+        float cardH = PAD_Y + LINE + statusBlock + PAD_Y + extraLines.size() * LINE;
 
         float left = -cardW / 2.0F;
         float top = -cardH / 2.0F;
+        float statusY = top + statusTop;
+        float extraY = top + extraTop;
 
         // ---- 实心块：面板 + 三条状态条 + 心情球 ----
         quad(buffer, matrix, left, top, left + cardW, top + cardH, 0.0F, PANEL);
 
-        float rowY = top + PAD_Y + LINE;
         float barX = left + cardW - PAD_X - BAR_W;
-        float barTop = rowY + 0.5F;
-        drawBar(buffer, matrix, barX, barTop, entity.getMaxHealth() <= 0 ? 0
+        drawBar(buffer, matrix, barX, statusY + 0.5F, entity.getMaxHealth() <= 0 ? 0
             : entity.getHealth() / entity.getMaxHealth(), 0xFFFF4040);
-        drawBar(buffer, matrix, barX, barTop + BAR_GAP, entity.hunger() / 100.0F, 0xFFFFD24A);
-        drawBar(buffer, matrix, barX, barTop + BAR_GAP * 2.0F, entity.stamina() / 100.0F, 0xFF58D858);
+        drawBar(buffer, matrix, barX, statusY + 0.5F + BAR_GAP, entity.hunger() / 100.0F, 0xFFFFD24A);
+        drawBar(buffer, matrix, barX, statusY + 0.5F + BAR_GAP * 2.0F, entity.stamina() / 100.0F, 0xFF58D858);
 
         float titleX = left + (cardW - titleWidth) / 2.0F;
         float faceX = customName == null ? titleX : titleX + nameWidth + FACE_GAP;
@@ -140,15 +190,22 @@ public final class ResidentNameplate {
 
         // ---- 文字 ----
         // 抬高一点 z：面板 quad 在 z=0、文字默认也在 z=0，深度相等时偶发 z-fighting
-        // （表现就是某个字突然变灰/被面板吃掉一格）。抬高 0.05 让文字永远压在面板上面。
+        // （表现就是某个字突然变灰/被面板吃掉一格）。主人 2026-11-20：任何情况下文字都不许变灰，
+        // 所以 z 抬到 0.2 并强制全亮，不受实体所处光照影响。
         poseStack.pushPose();
-        poseStack.translate(0.0F, 0.0F, 0.05F);
+        poseStack.translate(0.0F, 0.0F, 0.2F);
         Matrix4f textMatrix = poseStack.last().pose();
+        int textLight = LightTexture.FULL_BRIGHT;
         if (customName != null) {
             font.drawInBatch(customName, titleX, top + PAD_Y, 0xFFFFFFFF, false,
-                textMatrix, buffer, MODE, 0, light);
+                textMatrix, buffer, MODE, 0, textLight);
         }
-        font.drawInBatch(jobLine, left + PAD_X, rowY, 0xFFFFFFFF, false, textMatrix, buffer, MODE, 0, light);
+        // 工作状态：永远和状态条同高，不再因为下面有内容而往上顶
+        font.drawInBatch(jobLine, left + PAD_X, statusY, 0xFFFFFFFF, false, textMatrix, buffer, MODE, 0, textLight);
+        for (int i = 0; i < extraLines.size(); i++) {
+            font.drawInBatch(extraLines.get(i), left + PAD_X, extraY + i * LINE, 0xFFFFFFFF, false,
+                textMatrix, buffer, MODE, 0, textLight);
+        }
         poseStack.popPose();
     }
 

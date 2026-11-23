@@ -56,6 +56,8 @@ public class ResidentCombatGoal extends Goal {
     /** 被围判定：这个半径内有 ≥2 个威胁，且最近的比自己 4.5 格还近。 */
     private static final double CROWD_RADIUS = 5.0D;
     private static final double CROWD_DANGER = 4.5D;
+    /** 低血量逃跑时，离最近的敌人才算「安全到可以停下来吃东西」（和躲 TNT 一样跑远点）。 */
+    private static final double SAFE_EAT_DISTANCE = 16.0D;
 
     private final ResidentEntity resident;
     private LivingEntity target;
@@ -124,6 +126,11 @@ public class ResidentCombatGoal extends Goal {
         if (this.target == null || !this.target.isAlive()) {
             return false;
         }
+        // 目标中途变成"不该打"的东西（被玩家点了打火石 / 闪电苦力怕对非弓弩手 / 牧场里的动物）→ 立刻收手
+        if (ResidentDanger.isNeverTarget(this.resident, this.target)
+                || ResidentCombat.isRanchWorkAnimal(this.target)) {
+            return false;
+        }
         return this.resident.distanceToSqr(this.target) <= CHASE_RANGE * CHASE_RANGE;
     }
 
@@ -171,6 +178,37 @@ public class ResidentCombatGoal extends Goal {
         if (this.equipCooldown > 0) {
             this.equipCooldown--;
         }
+        // 血量 ≤75% 且身上没有恢复效果：先脱离包围圈，到安全距离再停下吃东西；
+        // 吃完（身上有恢复效果）立刻回战斗 —— 主人 2026-11-19 要的节奏。
+        // 放在「进食中」判断**前面**：安全距离吃东西时不能被"朝目标靠近"那段带过去。
+        if (this.resident.needsCombatRecovery()) {
+            this.resident.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
+            List<Mob> threats = ResidentCombat.threatsWithin(this.resident, 24.0D);
+            double nearest = this.target == null ? Double.MAX_VALUE
+                : Math.sqrt(this.resident.distanceToSqr(this.target));
+            for (Mob threat : threats) {
+                nearest = Math.min(nearest, Math.sqrt(this.resident.distanceToSqr(threat)));
+            }
+            if (nearest >= SAFE_EAT_DISTANCE) {
+                // 已经拉开距离：站住，让 ResidentHunger 开始吃
+                this.resident.getNavigation().stop();
+            } else {
+                this.resident.fleeFromCombat(threats.isEmpty() ? List.of(this.target) : threats);
+            }
+            return;
+        }
+        // 进食中（v0.2.11）：不换盾、不换武器、不出手，但**保留走位**（主人要求进食期间仍能位移）。
+        // 主手进食时食物就在手上，吃完（isEatingFood 变 false）下一 tick 就会恢复举盾/攻击。
+        if (this.resident.isEatingFood()) {
+            double eatDistance = Math.sqrt(this.resident.distanceToSqr(this.target));
+            this.resident.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
+            if (eatDistance > KEEP_AWAY) {
+                this.resident.getNavigation().moveTo(this.target, 1.0D);
+            } else {
+                this.resident.getNavigation().stop();
+            }
+            return;
+        }
         // 战斗时把盾牌放到副手（非战斗时不主动碰它，就是普通物品）
         if (this.resident.tickCount % 10 == 0) {
             ResidentCombat.equipShield(this.resident);
@@ -184,7 +222,12 @@ public class ResidentCombatGoal extends Goal {
         } else if (this.lostSightTicks < 1000) {
             this.lostSightTicks++;
         }
-        boolean stand = ResidentJobs.STAND.equals(this.resident.jobKey());
+        // 站岗居民（站立模式）：
+        // - 目标正**瞄着自己**（自卫）→ 钉在原地不动（原来的行为）；
+        // - 目标是在打别的居民/玩家（援助）→ 允许移动追击，打完由 ResidentReturnHomeGoal 送回去。
+        boolean standMode = ResidentJobs.STAND.equals(this.resident.jobKey());
+        boolean holdPosition = standMode && this.target instanceof net.minecraft.world.entity.Mob mob
+            && mob.getTarget() == this.resident;
         ResidentInventory inventory = this.resident.inventory();
         boolean hasMelee = ResidentCombat.hasMeleeWeapon(inventory);
         int rangedSlot = ResidentCombat.bestRangedSlot(inventory);
@@ -198,7 +241,7 @@ public class ResidentCombatGoal extends Goal {
         // 1) 上弦不可打断：怪物贴脸也先把弦上完，上完再按距离决定近战/远程
         if (this.isReloading()) {
             this.resident.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
-            if (stand) {
+            if (holdPosition) {
                 this.resident.getNavigation().stop();
             } else if (distance < KEEP_AWAY) {
                 this.strafeAway(List.of(this.target));
@@ -212,7 +255,7 @@ public class ResidentCombatGoal extends Goal {
         // 2) 被围：**只在攻击冷却期**才脱离包围圈（v0.1.25）
         //    旧版不管冷却好没好都先 `return`，结果"冷却好了却站在 4~4.5 格举盾发呆/一直后撤"。
         //    主人的规则：保持距离只发生在冷却期间，冷却好了就上去打。
-        if (!stand) {
+        if (!standMode) {
             if (--this.threatCacheTicks <= 0) {
                 this.cachedThreats = ResidentCombat.threatsWithin(this.resident, CROWD_RADIUS);
                 this.threatCacheTicks = 4;
@@ -228,11 +271,13 @@ public class ResidentCombatGoal extends Goal {
         // 3) 正常交战
         this.resident.getLookControl().setLookAt(this.target, 30.0F, 30.0F);
         // 空手也算近战（拳头），不能因为"背包里没有近战武器"就退化成远程/干站
-        boolean meleeMode = distance <= MELEE_ENGAGE && (hasMelee || rangedSlot < 0);
+        // 闪电苦力怕：弓弩手也只许远程打，绝不切近战贴上去
+        boolean forceRanged = ResidentDanger.mustKeepDistance(this.target);
+        boolean meleeMode = !forceRanged && distance <= MELEE_ENGAGE && (hasMelee || rangedSlot < 0);
         if (meleeMode || rangedSlot < 0) {
-            this.meleeTick(distance, stand);
+            this.meleeTick(distance, holdPosition);
         } else {
-            this.rangedTick(distance, stand, rangedSlot, hasMelee);
+            this.rangedTick(distance, holdPosition, rangedSlot, hasMelee);
         }
     }
 

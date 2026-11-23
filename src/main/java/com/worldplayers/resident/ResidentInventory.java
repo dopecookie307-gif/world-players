@@ -197,6 +197,35 @@ public class ResidentInventory implements Container {
         return rest;
     }
 
+    /**
+     * 使用物品前的「先拿在手上」：把背包里第一个满足条件的物品换到主手，主手原来的东西放回那个槽位。
+     *
+     * <p>主人 2026-11-19 定的表现规则：和玩家一样，**用方块/物品时东西是握在手上消耗的**，
+     * 用完剩下的还留在手上；只有工作/战斗需要握别的东西时才被挤下去。
+     * 所以插火把不再从背包角落凭空扣一支，而是先把火把换到主手再扣。</p>
+     *
+     * @return 主手现在是否已经拿着满足条件的物品（搜索范围：主手 + 快捷栏 + 主背包，不含副手/盔甲）
+     */
+    public boolean holdInMainHand(java.util.function.Predicate<ItemStack> matcher) {
+        ItemStack main = this.getItem(MAIN_HAND);
+        if (matcher.test(main)) {
+            return true;
+        }
+        for (int slot = 0; slot < BACKPACK_START + 27; slot++) {
+            if (slot == MAIN_HAND) {
+                continue;
+            }
+            ItemStack stack = this.getItem(slot);
+            if (stack.isEmpty() || !matcher.test(stack)) {
+                continue;
+            }
+            this.setItem(slot, main);
+            this.setItem(MAIN_HAND, stack);
+            return true;
+        }
+        return false;
+    }
+
     /** 能不能塞下这件物品（用于"背包满了就别绕路去捡"的判断）。 */
     public boolean canAccept(ItemStack offered) {
         if (offered.isEmpty()) {
@@ -209,6 +238,22 @@ public class ResidentInventory implements Container {
             }
             if (ItemStack.isSameItemSameComponents(existing, offered)
                     && existing.getCount() < existing.getMaxStackSize()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 背包里还有没有「能放东西」的槽位（有空格，或者有未满的堆叠）。
+     *
+     * <p>给通用背包满暂停的 5 秒探测用（12 号规格 §5.8 阶段 B）：不必知道具体要放什么，
+     * 先粗判一下；真要塞的时候再按 {@link #canAccept} 精确判，塞不下就继续暂停。</p>
+     */
+    public boolean hasRoomForAnything() {
+        for (int slot = 0; slot < BACKPACK_START + 27; slot++) {
+            ItemStack stack = this.getItem(slot);
+            if (stack.isEmpty() || stack.getCount() < stack.getMaxStackSize()) {
                 return true;
             }
         }

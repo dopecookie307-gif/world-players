@@ -67,6 +67,11 @@ public final class ResidentCombat {
         if (entity instanceof NeutralMob) {
             return true;
         }
+        // Modular Golems 的傀儡（v0.2.1）：按 mod id 兜底，以后新增的傀儡同样算中立
+        if (com.worldplayers.compat.modulargolems.ModularGolemsCompat.isLoaded()
+                && com.worldplayers.compat.modulargolems.ModularGolemsCompat.isGolem(entity)) {
+            return true;
+        }
         EntityType<?> type = entity.getType();
         return type.is(NEUTRAL_TAG)
             // 兜底：tag 被数据包覆盖掉时也不至于去打末影人/僵尸猪灵
@@ -80,12 +85,52 @@ public final class ResidentCombat {
     }
 
     /**
+     * 牧场里的**工作动物**（2026-11-23 主人报「屠宰时附近居民冲过来增援、动物全被杀光」）：
+     * 居民不把它当战斗目标、不去援助、剑的横扫也不波及它。
+     *
+     * <p>屠宰用的是 {@code Animal#hurt(mobAttack)}，会把动物的 {@code lastHurtByMob} 记成员工，
+     * 以前的援助判定会把这当成「它在打居民」→ 32 格内所有居民冲过来用剑砍 + 横扫，整群动物瞬间团灭。</p>
+     *
+     * <p>2026-11-23 第 9 轮（主人报「牧场居民依旧随机挑动物攻击、自动拿菜刀」）：</p>
+     * <ul>
+     *   <li>以前用 {@code findRanchAt(animal.blockPosition())} —— 只认**脚所在那一格**。
+     *       牧场区域常常只框地面一层，动物站在地面方块上时脚在 {@code max.y + 1}，判定直接落空，
+     *       于是居民把牧场里的动物当普通动物（玩家 / 员工一碰它们，全殖民地就冲过来帮忙砍）。</li>
+     *   <li>现在与 {@code WorkZone#containsBody} 同一口径：脚所在格、脚下一格、脚上一格任一在牧场里就算。</li>
+     *   <li>而且**不再要求动物类型与牧场设定一致**：牧场里养着的任何动物都不是居民的打架对象
+     *       （类型不匹配的动物只是员工不会去剪 / 喂 / 宰，不该被居民当怪打）。</li>
+     * </ul>
+     */
+    public static boolean isRanchWorkAnimal(LivingEntity entity) {
+        if (!(entity instanceof net.minecraft.world.entity.animal.Animal)) {
+            return false;
+        }
+        if (!(entity.level() instanceof ServerLevel level)) {
+            return false;
+        }
+        net.minecraft.core.BlockPos feet = entity.blockPosition();
+        com.worldplayers.resident.WorkZoneData data = com.worldplayers.resident.WorkZoneData.get(level);
+        return isRanchAt(data, feet)
+            || isRanchAt(data, feet.below())
+            || isRanchAt(data, feet.above());
+    }
+
+    private static boolean isRanchAt(com.worldplayers.resident.WorkZoneData data,
+                                     net.minecraft.core.BlockPos pos) {
+        com.worldplayers.resident.WorkZone zone = data.findRanchAt(pos);
+        return zone != null && zone.isRanch();
+    }
+
+    /**
      * 绝对不打：铁傀儡不论野生还是玩家造的，居民都绝不还手；铁傀儡也不会把居民当目标
      * （{@code ResidentHate} 里同一个判定）。
      */
     public static boolean isProtected(Entity entity) {
         return entity instanceof IronGolem
             || entity instanceof ResidentEntity
+            // Modular Golems（v0.2.1）：所有傀儡 —— 含未来新增的 —— 居民都绝不还手/绝不横扫
+            || (com.worldplayers.compat.modulargolems.ModularGolemsCompat.isLoaded()
+                && com.worldplayers.compat.modulargolems.ModularGolemsCompat.isGolem(entity))
             || entity.getType().is(PROTECTED_TAG);
     }
 
@@ -108,13 +153,20 @@ public final class ResidentCombat {
         LivingEntity best = null;
         double bestScore = Double.MAX_VALUE;
         for (Mob mob : resident.level().getEntitiesOfClass(Mob.class, box, m -> m != resident && m.isAlive())) {
-            if (isProtected(mob) || !resident.canAttack(mob)) {
+            // isNeverTarget：点燃的苦力怕（必炸）谁都不选；闪电苦力怕只给弓弩手选
+            if (isProtected(mob) || ResidentDanger.isNeverTarget(resident, mob) || !resident.canAttack(mob)) {
+                continue;
+            }
+            // 2026-11-23：牧场里的工作动物永远不是战斗目标（屠宰/剪毛不是「被袭击」）
+            if (isRanchWorkAnimal(mob)) {
                 continue;
             }
             double distance = resident.distanceToSqr(mob);
             boolean attackingResident = mob.getTarget() == resident
                 || mob.getTarget() instanceof ResidentEntity
-                || mob.getLastHurtByMob() instanceof ResidentEntity;
+                // 2026-11-23：只有**敌对生物**「最近打过居民」才算增援理由。
+                // 被动动物被居民打过（屠宰 / 剪毛 / 喂食都可能）不再触发全殖民地冲过来增援。
+                || (mob instanceof Enemy && mob.getLastHurtByMob() instanceof ResidentEntity);
             boolean attackingOwner = owner != null
                 && (mob.getTarget() == owner || mob.getLastHurtByMob() == owner);
             boolean playerAttackedIt = owner != null && mob.getLastHurtByMob() == owner;
@@ -151,14 +203,20 @@ public final class ResidentCombat {
         AABB box = resident.getBoundingBox().inflate(radius);
         java.util.List<Mob> found = new java.util.ArrayList<>();
         for (Mob mob : resident.level().getEntitiesOfClass(Mob.class, box, m -> m != resident && m.isAlive())) {
-            if (isProtected(mob) || !resident.canAttack(mob)) {
+            if (isProtected(mob) || ResidentDanger.isNeverTarget(resident, mob) || !resident.canAttack(mob)) {
+                continue;
+            }
+            // 2026-11-23：牧场工作动物不算「威胁」（屠宰时别的居民不会以为被围）
+            if (isRanchWorkAnimal(mob)) {
                 continue;
             }
             boolean hostile = mob instanceof Enemy
                 || mob.getTarget() == resident
                 || mob.getTarget() instanceof ResidentEntity
-                || mob.getLastHurtByMob() == resident
-                || (owner != null && (mob.getTarget() == owner || mob.getLastHurtByMob() == owner));
+                // 只有敌对生物「最近打过居民 / 玩家」才算威胁：被动动物被居民打过不算
+                || (mob instanceof Enemy && mob.getLastHurtByMob() == resident)
+                || (owner != null && (mob.getTarget() == owner
+                    || (mob instanceof Enemy && mob.getLastHurtByMob() == owner)));
             if (hostile) {
                 found.add(mob);
             }
@@ -560,6 +618,10 @@ public final class ResidentCombat {
         for (LivingEntity other : resident.level().getEntitiesOfClass(LivingEntity.class, box,
                 e -> e != resident && e != mainTarget && e.isAlive() && e instanceof Mob)) {
             if (isProtected(other) || !resident.canAttack(other)) {
+                continue;
+            }
+            // 2026-11-23：横扫不波及牧场的工作动物（屠宰时不小心把整群扫死）
+            if (isRanchWorkAnimal(other)) {
                 continue;
             }
             other.hurt(resident.damageSources().mobAttack(resident), damage);

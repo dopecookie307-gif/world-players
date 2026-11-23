@@ -22,6 +22,11 @@ public class ResidentManualItem extends Item {
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
+        // 副手的居民手册永远不可交互（2026-11-19 主人定的长期规矩，保留到开发结束）：
+        // 副手拿手册只是为了渲染浮窗/以后的其它渲染，而且用调试棒右键时会误开手册。
+        if (hand == InteractionHand.OFF_HAND) {
+            return InteractionResultHolder.fail(player.getItemInHand(hand));
+        }
         if (level.isClientSide) {
             // 类加载是惰性的：专用服务器永远走不到这一行，不会去加载客户端类
             ManualScreen.open();

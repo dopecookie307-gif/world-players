@@ -18,9 +18,11 @@ public final class WPMenus {
         () -> IMenuTypeExtension.create((containerId, inventory, data) -> {
             Player player = inventory.player;
             int entityId = data.readVarInt();
+            // 只读查看（手册成员列表点开）会多带一个标记
+            boolean remote = data.isReadable() && data.readBoolean();
             net.minecraft.world.entity.Entity entity = player.level().getEntity(entityId);
             ResidentEntity resident = entity instanceof ResidentEntity found ? found : null;
-            return new ResidentMenu(containerId, inventory, resident);
+            return new ResidentMenu(containerId, inventory, resident, remote);
         }));
 
     private WPMenus() {

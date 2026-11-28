@@ -153,6 +153,9 @@ public class WorkZoneScreen extends Screen {
                 } else if (WorkZone.TYPE_ENTERTAINMENT.equals(type)) {
                     // 14 号文档 1.6：「用于恢复心情值 / For restoring Mood」
                     tooltipKey = "gui.worldplayers.zone.type.entertainment.tooltip";
+                } else if (WorkZone.TYPE_CUSTOM.equals(type)) {
+                    // 2026-11-25 主人：白纸图标、可部署员工、工作状态文字
+                    tooltipKey = "gui.worldplayers.zone.type.custom.tooltip";
                 } else if (WorkZone.TYPE_FORBIDDEN.equals(type)) {
                     // 主人 2026-11-23：禁行区域说明
                     tooltipKey = "gui.worldplayers.zone.type.forbidden.tooltip";

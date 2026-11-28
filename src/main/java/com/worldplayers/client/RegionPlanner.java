@@ -524,6 +524,9 @@ public final class RegionPlanner {
         if (WorkZone.TYPE_ENTERTAINMENT.equals(type)) {
             return 0xAA00AA; // 娱乐区域（14 号文档 1.3）：#AA00AA 紫
         }
+        if (WorkZone.TYPE_CUSTOM.equals(type)) {
+            return 0xFFF6E0; // 自订区域（2026-11-25）：白纸色
+        }
         if (WorkZone.TYPE_MINE.equals(type) || WorkZone.TYPE_FILL.equals(type)) {
             return 0x55FF55; // 工程区域（挖掘 / 填充）：绿色（规格 3.1）
         }

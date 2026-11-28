@@ -147,6 +147,8 @@ public class ResidentCombatGoal extends Goal {
         this.spotCooldown = 0;
         this.moveCheckTicks = 0;
         this.retryMoveCooldown = 0;
+        // 战斗移速同样走心情 / 体力档（2026-11-24 主人定稿，方案 A）
+        this.resident.applyTravelSpeed();
     }
 
     @Override
@@ -154,6 +156,7 @@ public class ResidentCombatGoal extends Goal {
         this.target = null;
         this.resident.setTarget(null);
         this.resident.getNavigation().stop();
+        this.resident.applyMovementSpeed(ResidentEntity.BASE_MOVEMENT_SPEED);
         this.clearShootingSpot();
         // 正在给弩上弦时不打断：交给 ResidentEntity#tickReload 把弦上完
         if (!this.isReloading()) {
@@ -168,6 +171,10 @@ public class ResidentCombatGoal extends Goal {
 
     @Override
     public void tick() {
+        // 心情 / 体力变化时战斗移速跟着变（每 20 tick 重算，不是每 tick 写属性）
+        if (this.resident.tickCount % 20 == 0) {
+            this.resident.applyTravelSpeed();
+        }
         if (this.target == null) {
             return;
         }

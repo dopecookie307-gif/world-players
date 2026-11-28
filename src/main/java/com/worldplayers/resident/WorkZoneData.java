@@ -276,7 +276,9 @@ public class WorkZoneData extends SavedData {
                 entry.getString("AnimalType"),
                 entry.contains("AnimalMax", Tag.TAG_INT)
                     ? entry.getInt("AnimalMax") : WorkZone.ANIMAL_DEFAULT,
-                entry.contains("AnimalShear", Tag.TAG_BYTE) && entry.getBoolean("AnimalShear")));
+                entry.contains("AnimalShear", Tag.TAG_BYTE) && entry.getBoolean("AnimalShear"),
+                // 自订区域「工作状态」文字（2026-11-25）：旧存档没有 → 空
+                entry.getString("StatusText")));
         }
         return data;
     }
@@ -310,6 +312,8 @@ public class WorkZoneData extends SavedData {
             entry.putString("AnimalType", zone.animalType());
             entry.putInt("AnimalMax", zone.animalMax());
             entry.putBoolean("AnimalShear", zone.animalShear());
+            // 自订区域「工作状态」文字（2026-11-25，只对自订区域有意义，但所有类型都存一份）
+            entry.putString("StatusText", zone.statusText());
             list.add(entry);
         }
         tag.put(TAG_ZONES, list);

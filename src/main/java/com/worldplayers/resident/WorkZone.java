@@ -32,7 +32,8 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
                        String saplingType, int plantMode, String placementMode,
                        String projectBlock, boolean projectRunning, int projectDone,
                        String description,
-                       String animalType, int animalMax, boolean animalShear) {
+                       String animalType, int animalMax, boolean animalShear,
+                       String statusText) {
     public static final String TYPE_ROAD = "road";
     public static final String TYPE_FARM = "farm";
     /** 树场（2026-11-21）：工作内容 = 砍树 + 种树，规则见 10 号文件。 */
@@ -52,10 +53,17 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
     public static final String TYPE_FILL = "fill";
     /** 禁行区域（主人 2026-11-20）：居民通勤 / 游荡都会绕开。 */
     public static final String TYPE_FORBIDDEN = "forbidden";
+    /**
+     * 自订区域（2026-11-25，主人提出）：白纸图标、可以部署员工，**没有实际工作内容**；
+     * 员工进来以后在区域里游荡、每 6 秒消耗 0.1 体力点，并在头顶显示详情页里写下的「工作状态」文字。
+     */
+    public static final String TYPE_CUSTOM = "custom";
     /** 一个工作区最多几个员工栏。 */
     public static final int MAX_EMPLOYEES = 5;
     /** 娱乐区简介的字符上限（14 号文档 8.3：防同步包 / 存档膨胀）。 */
     public static final int MAX_DESCRIPTION = 500;
+    /** 自订区域「工作状态」文字的字符上限（显示在头顶浮窗一行，太长会把卡片拉得很宽）。 */
+    public static final int MAX_STATUS_TEXT = 40;
     /** 树场：没选树种（默认）——员工只在区域内踱步。 */
     public static final String TREE_NONE = "none";
     /** 树场种植模式：单株。 */
@@ -89,6 +97,23 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         // 牧场设定（v0.3.0）：类型非法回退牛，数量夹在 2~64
         animalType = com.worldplayers.resident.ranch.RanchType.byId(animalType).id();
         animalMax = Math.max(ANIMAL_MIN, Math.min(ANIMAL_MAX, animalMax));
+        // 自订区域的「工作状态」文字（2026-11-25）：去首尾空白 + 40 字上限
+        statusText = statusText == null ? "" : statusText.strip();
+        if (statusText.length() > MAX_STATUS_TEXT) {
+            statusText = statusText.substring(0, MAX_STATUS_TEXT);
+        }
+    }
+
+    /** 兼容没有「工作状态」文字的调用（v0.3.1-alpha.12 之前）。 */
+    public WorkZone(String name, String type, BlockPos min, BlockPos max, BlockPos origin,
+                    List<String> employees,
+                    String saplingType, int plantMode, String placementMode,
+                    String projectBlock, boolean projectRunning, int projectDone,
+                    String description,
+                    String animalType, int animalMax, boolean animalShear) {
+        this(name, type, min, max, origin, employees, saplingType, plantMode, placementMode,
+            projectBlock, projectRunning, projectDone, description, animalType, animalMax,
+            animalShear, "");
     }
 
     /** 兼容旧调用：没有员工、所有设定默认（树场「无 / 单株 / 自动」、工程空、简介空、牧场默认）。 */
@@ -137,7 +162,7 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, list,
             this.saplingType, this.plantMode, this.placementMode,
             this.projectBlock, this.projectRunning, this.projectDone, this.description,
-            this.animalType, this.animalMax, this.animalShear);
+            this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 改名后的副本（员工 / 范围 / 第一选择点都不变）。 */
@@ -145,7 +170,7 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         return new WorkZone(newName, this.type, this.min, this.max, this.origin, this.employees,
             this.saplingType, this.plantMode, this.placementMode,
             this.projectBlock, this.projectRunning, this.projectDone, this.description,
-            this.animalType, this.animalMax, this.animalShear);
+            this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 简介改过的新副本（娱乐区 2026-11-22）。 */
@@ -153,7 +178,7 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
             this.saplingType, this.plantMode, this.placementMode,
             this.projectBlock, this.projectRunning, this.projectDone, text,
-            this.animalType, this.animalMax, this.animalShear);
+            this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 牧场设定（动物类型 / 最大数量 / 剪毛）改过的新副本（v0.3.0）。 */
@@ -161,21 +186,29 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
             this.saplingType, this.plantMode, this.placementMode,
             this.projectBlock, this.projectRunning, this.projectDone, this.description,
-            animalType, animalMax, shear);
+            animalType, animalMax, shear, this.statusText);
+    }
+
+    /** 自订区域「工作状态」文字改过的新副本（2026-11-25）。 */
+    public WorkZone withStatusText(String text) {
+        return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
+            this.saplingType, this.plantMode, this.placementMode,
+            this.projectBlock, this.projectRunning, this.projectDone, this.description,
+            this.animalType, this.animalMax, this.animalShear, text);
     }
 
     /** 树场设定（树种 / 种植模式 / 种植位置）改过的新副本。 */
     public WorkZone withTreeSettings(String species, int mode, String placement) {
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
             species, mode, placement, this.projectBlock, this.projectRunning, this.projectDone,
-            this.description, this.animalType, this.animalMax, this.animalShear);
+            this.description, this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 工程字段（方块 / 是否运行中）改过的新副本。 */
     public WorkZone withProject(String block, boolean running) {
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
             this.saplingType, this.plantMode, this.placementMode, block, running, this.projectDone,
-            this.description, this.animalType, this.animalMax, this.animalShear);
+            this.description, this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 进度改过的新副本（只存不算）。 */
@@ -183,7 +216,7 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
         return new WorkZone(this.name, this.type, this.min, this.max, this.origin, this.employees,
             this.saplingType, this.plantMode, this.placementMode,
             this.projectBlock, this.projectRunning, done, this.description,
-            this.animalType, this.animalMax, this.animalShear);
+            this.animalType, this.animalMax, this.animalShear, this.statusText);
     }
 
     /** 是不是树场（工作内容是砍树 / 种树）。 */
@@ -221,6 +254,11 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
     /** 是不是娱乐区域（2026-11-22：自由时间来这儿恢复心情）。 */
     public boolean isEntertainment() {
         return TYPE_ENTERTAINMENT.equals(this.type);
+    }
+
+    /** 是不是自订区域（2026-11-25：没有工作内容，只在区域里游荡 + 显示自定义状态）。 */
+    public boolean isCustom() {
+        return TYPE_CUSTOM.equals(this.type);
     }
 
     /** 是不是挖掘工程。 */
@@ -305,6 +343,8 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
             buf.writeUtf(zone.animalType());
             buf.writeVarInt(zone.animalMax());
             buf.writeBoolean(zone.animalShear());
+            // v0.3.1-alpha.12：自订区域的「工作状态」文字
+            buf.writeUtf(zone.statusText(), MAX_STATUS_TEXT);
         },
         buf -> {
             String name = buf.readUtf();
@@ -324,9 +364,10 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
             String animalType = buf.readUtf();
             int animalMax = buf.readVarInt();
             boolean animalShear = buf.readBoolean();
+            String statusText = buf.readUtf(MAX_STATUS_TEXT);
             return new WorkZone(name, type, min, max, origin, employees, species, mode, placement,
                 projectBlock, projectRunning, projectDone, description,
-                animalType, animalMax, animalShear);
+                animalType, animalMax, animalShear, statusText);
         });
 
     /** 唯一键：同名区域靠「名字 + 第一选择点」区分（删除/改名/高亮都按它）。 */
@@ -429,6 +470,6 @@ public record WorkZone(String name, String type, BlockPos min, BlockPos max, Blo
      */
     public static java.util.List<String> types() {
         return java.util.List.of(TYPE_ROAD, TYPE_MINE, TYPE_FILL, TYPE_FARM, TYPE_TREE_FARM,
-            TYPE_RANCH, TYPE_FISHERY, TYPE_ENTERTAINMENT, TYPE_FORBIDDEN);
+            TYPE_RANCH, TYPE_FISHERY, TYPE_ENTERTAINMENT, TYPE_CUSTOM, TYPE_FORBIDDEN);
     }
 }

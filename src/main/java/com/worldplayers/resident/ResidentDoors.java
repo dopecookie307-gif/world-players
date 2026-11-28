@@ -12,8 +12,10 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.pathfinder.Path;
 
 /**
@@ -135,6 +137,28 @@ public final class ResidentDoors {
         }
     }
 
+    /**
+     * 木门的延迟关闭（2026-11-24 修「卡在打开的门框里、不停开关门」）。
+     *
+     * <p>{@code ResidentOpenDoorGoal} 在居民还贴着门口时不再当场关门，而是把门登记到这里：
+     * 等人真的走开（3.5 格）或穿到另一侧，再由 {@link #tick} 关掉。木门 / 栅栏门共用一张表。</p>
+     */
+    public static void deferClose(ServerLevel level, BlockPos pos, ResidentEntity resident) {
+        BlockState state = level.getBlockState(pos);
+        if (!(state.getBlock() instanceof DoorBlock) || !state.getValue(DoorBlock.OPEN)) {
+            return;
+        }
+        GlobalPos key = GlobalPos.of(level.dimension(), pos.immutable());
+        if (OPEN.containsKey(key)) {
+            return;
+        }
+        boolean facingZ = state.getValue(DoorBlock.FACING).getAxis()
+            == net.minecraft.core.Direction.Axis.Z;
+        int passAxis = facingZ ? 1 : 0;
+        OPEN.put(key, new Opened(level.dimension(), pos.immutable(), resident.getUUID(),
+            passAxis, sideOf(resident, pos, passAxis)));
+    }
+
     /** 这扇门是不是居民「真的要走过去」的：下一路径点就在门上，或者人已经贴到门口。 */
     private static boolean wantsThrough(ResidentEntity resident, BlockPos next, BlockPos gate) {
         double horizontal = horizontalDistance(resident, gate);
@@ -170,7 +194,7 @@ public final class ResidentDoors {
      * 或「最多 60 秒」才关，小牧场里员工离门永远不到 3.5 格，门就开着。现在一过门就关。</p>
      */
     private static boolean crossedGate(ResidentEntity resident, Opened entry) {
-        if (horizontalDistance(resident, entry.pos) <= 0.6D) {
+        if (horizontalDistance(resident, entry.pos) <= 1.0D) {
             return false;
         }
         int side = sideOf(resident, entry.pos, entry.passAxis);
@@ -206,11 +230,23 @@ public final class ResidentDoors {
         }
     }
 
-    private static void close(ServerLevel level, BlockPos pos) {
+    /** 把一扇门关上（木门会同步上下两半）；已经关着就什么都不做。 */
+    public static void close(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.getBlock() instanceof FenceGateBlock && state.getValue(FenceGateBlock.OPEN)) {
             level.setBlock(pos, state.setValue(FenceGateBlock.OPEN, false), 10);
             level.playSound(null, pos, SoundEvents.FENCE_GATE_CLOSE, SoundSource.BLOCKS,
+                1.0F, level.getRandom().nextFloat() * 0.1F + 0.9F);
+        } else if (state.getBlock() instanceof DoorBlock && state.getValue(DoorBlock.OPEN)) {
+            // 木门是上下两格：只改一半会留下「半开」的门，两半一起关
+            level.setBlock(pos, state.setValue(DoorBlock.OPEN, false), 10);
+            BlockPos other = state.getValue(DoorBlock.HALF) == DoubleBlockHalf.LOWER
+                ? pos.above() : pos.below();
+            BlockState otherState = level.getBlockState(other);
+            if (otherState.getBlock() == state.getBlock()) {
+                level.setBlock(other, otherState.setValue(DoorBlock.OPEN, false), 10);
+            }
+            level.playSound(null, pos, SoundEvents.WOODEN_DOOR_CLOSE, SoundSource.BLOCKS,
                 1.0F, level.getRandom().nextFloat() * 0.1F + 0.9F);
         }
     }

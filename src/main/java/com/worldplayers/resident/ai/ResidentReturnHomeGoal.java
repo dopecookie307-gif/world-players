@@ -114,7 +114,7 @@ public class ResidentReturnHomeGoal extends Goal {
         if (ResidentJobs.STAND.equals(this.resident.jobKey())) {
             this.resident.setActivity(ResidentJobs.STAND);
         }
-        this.resident.applyMovementSpeed(ResidentEntity.moodMovementSpeed(this.resident.mood()));
+        this.resident.applyTravelSpeed();
     }
 
     @Override

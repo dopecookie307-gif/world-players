@@ -52,6 +52,8 @@ public class WorkZoneDetailScreen extends Screen {
     private static final int PROGRESS_ROW = 14;
     /** 勾 / 叉按钮尺寸。 */
     private static final int PROJECT_BTN = 14;
+    /** 自订区域「工作状态」行高度（2026-11-25）。 */
+    private static final int STATUS_ROW = 20;
 
     private static final int ACTION_PICK = 1;
     private static final int ACTION_DELETE = 2;
@@ -89,6 +91,16 @@ public class WorkZoneDetailScreen extends Screen {
     private int descBoxY;
     private int descBoxW;
     private int descBoxH;
+
+    // ---- 自订区域「工作状态」文字（2026-11-25） ----
+    /** 员工栏底下的单行输入框：员工工作时头顶显示的就是这里的文字。 */
+    @javax.annotation.Nullable
+    private net.minecraft.client.gui.components.EditBox statusBox;
+    private int statusBoxX;
+    private int statusBoxY;
+    private int statusBoxW;
+    /** 上一次已经发出去的文字（变化才发，避免每 tick 刷包）。 */
+    private String lastStatusText = "";
     /** 正在打开成员清单的员工槽位；-1 = 没打开。 */
     private int pickerSlot = -1;
     /** 员工清单滚动量（0 = 最上面）。 */
@@ -201,6 +213,17 @@ public class WorkZoneDetailScreen extends Screen {
             this.animalBox.setValue(String.valueOf(this.animalMax));
             this.animalBox.setVisible(false);
             this.addRenderableWidget(this.animalBox);
+        }
+        // 自订区域：员工栏底下的「工作状态」文字框（2026-11-25）
+        if (this.zone.isCustom()) {
+            this.statusBox = new net.minecraft.client.gui.components.EditBox(this.font, 0, 0,
+                100, 14, Component.translatable("gui.worldplayers.zone.status_hint"));
+            this.statusBox.setHint(Component.translatable("gui.worldplayers.zone.status_hint"));
+            this.statusBox.setMaxLength(WorkZone.MAX_STATUS_TEXT);
+            this.statusBox.setValue(this.zone.statusText());
+            this.statusBox.setVisible(false);
+            this.lastStatusText = this.statusBox.getValue();
+            this.addRenderableWidget(this.statusBox);
         }
     }
 
@@ -364,6 +387,10 @@ public class WorkZoneDetailScreen extends Screen {
         if (this.zone.isEntertainment()) {
             h += LINE_H + descriptionHeight() + LINE_H;
         }
+        // 自订区域「工作状态」文字（2026-11-25）：员工栏底下的一行
+        if (this.zone.isCustom()) {
+            h += LINE_H + STATUS_ROW;
+        }
         return h;
     }
 
@@ -435,6 +462,11 @@ public class WorkZoneDetailScreen extends Screen {
         // 树场设定（员工栏底下，规则 5）
         if (this.zone.isTreeFarm()) {
             y = this.renderTreeSettings(gui, x, y, mouseX, mouseY);
+        }
+
+        // 自订区域「工作状态」文字（员工栏底下，2026-11-25）
+        if (this.zone.isCustom()) {
+            y = this.renderStatusText(gui, x, y);
         }
 
         // 牧场设定（员工栏底下，v0.3.0）
@@ -867,6 +899,54 @@ public class WorkZoneDetailScreen extends Screen {
             new com.worldplayers.network.ZoneDescriptionPayload(this.zone.key(), text));
     }
 
+    /**
+     * 自订区域「工作状态」文字行（2026-11-25，主人要求）：
+     * 员工栏底下「工作状态：」+ 单行输入框；输入内容**实时保存**，员工工作时头顶就显示这段文字。
+     */
+    private int renderStatusText(GuiGraphics gui, int x, int y) {
+        Component label = Component.translatable("gui.worldplayers.zone.status_label");
+        gui.drawString(this.font, label, x, y + 4, this.theme.inkColor(), false);
+        int labelW = this.font.width(label) + 6;
+        int boxW = this.theme.pageWidth() - 24 - labelW;
+        this.statusBoxX = x + labelW;
+        this.statusBoxY = y;
+        this.statusBoxW = boxW;
+        if (this.statusBox != null) {
+            this.statusBox.setX(this.statusBoxX);
+            this.statusBox.setY(this.statusBoxY);
+            this.statusBox.setWidth(boxW);
+            boolean visible = this.isRanchRowVisible(this.statusBoxY) && !this.isOverlayOpen();
+            this.statusBox.setVisible(visible);
+            if (!visible) {
+                this.statusBox.setFocused(false);
+            }
+        }
+        return y + STATUS_ROW;
+    }
+
+    /** 把「工作状态」文字发到服务端（自订区域才有意义；tick 里变化即发，关闭时再补一次）。 */
+    private void pushStatusText() {
+        if (!this.zone.isCustom() || this.statusBox == null) {
+            return;
+        }
+        String text = this.statusBox.getValue();
+        if (text.equals(this.lastStatusText)) {
+            return;
+        }
+        this.lastStatusText = text;
+        net.neoforged.neoforge.network.PacketDistributor.sendToServer(
+            new com.worldplayers.network.ZoneStatusTextPayload(this.zone.key(), text));
+    }
+
+    /** 每次输入变化就保存（主人：任何方式关闭页面都不丢内容）。 */
+    @Override
+    public void tick() {
+        super.tick();
+        if (this.statusBox != null && !this.statusBox.getValue().equals(this.lastStatusText)) {
+            this.pushStatusText();
+        }
+    }
+
     /** 一行员工：左边「员工：」文字（无框）+ 右边员工框 + 最右边删除 ×。 */
 
     private void drawEmployeeRow(GuiGraphics gui, int index, int x, int y, float mouseX, float mouseY) {
@@ -1112,6 +1192,7 @@ public class WorkZoneDetailScreen extends Screen {
         if (isOverClose(mouseX, mouseY)) {
             ZoneUi.click();
             this.pushDescription();
+            this.pushStatusText();
             if (this.minecraft != null) {
                 this.minecraft.setScreen(null);
             }
@@ -1192,6 +1273,13 @@ public class WorkZoneDetailScreen extends Screen {
                 this.pushTree();
                 return true;
             }
+        }
+        // 自订区域「工作状态」输入框（2026-11-25）：点框里开始输入
+        if (this.zone.isCustom() && this.statusBox != null
+                && inside(mouseX, mouseY, this.statusBoxX, this.statusBoxY, this.statusBoxW, 14)) {
+            ZoneUi.click();
+            this.statusBox.setFocused(true);
+            return super.mouseClicked(mouseX, mouseY, button);
         }
         // 牧场设定（v0.3.0）：类型下拉 / 数量输入框 / 剪毛勾选 / 储存按钮
         if (this.zone.isRanch()) {
@@ -1580,11 +1668,13 @@ public class WorkZoneDetailScreen extends Screen {
     @Override
     public void onClose() {
         this.pushDescription();
+        this.pushStatusText();
         this.backToManual();
     }
     private void backToManual() {
-        // 任何方式离开详情页 → 简介立即保存（14 号文档 1.8.4）
+        // 任何方式离开详情页 → 简介 / 工作状态文字立即保存（14 号文档 1.8.4、2026-11-25）
         this.pushDescription();
+        this.pushStatusText();
         if (this.minecraft == null) {
             return;
         }

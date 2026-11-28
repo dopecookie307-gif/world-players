@@ -107,6 +107,24 @@ Everything below is the behaviour **0.3.0** ships with. Values are read from the
 | Rod search | inventory scanned every **20 ticks**; offhand counts |
 | Per cast | **−0.1 stamina**, **−1 durability** |
 
+## Path network (0.3.1)
+
+| | |
+|---|---|
+| Brush controls | left click cycles path point → anchor → delete; right click selects then links a point; Shift + right click exits linking; Alt + scroll changes the action (walk / jump / climb ladder / teleport) |
+| Point placement | **1 block** outside the clicked face |
+| Rendering | points and segments within **32 blocks**, **through blocks**, while holding the brush |
+| Segments | two-way by default; max length **64 blocks**; node width **1 – 8**, segment capacity = min(width of both ends) |
+| When the network is used | destinations at least **12 blocks** away |
+| Entry / exit | nearest node within **48 blocks**; three-tier ordering (same level \|dy\|≤2 and ≤12 horizontally → same level → all), score = horizontal + **4 × vertical** |
+| Entry validation | up to **4** candidate entries, checked with vanilla `canReach` |
+| Route | max length **1024**; walked node by node, arrival within **1.5 blocks** horizontally (**2.5** for buried nodes) |
+| Stalls | no movement for **2 s** → jump + replan; **6 s** → give up to vanilla; unreachable node dropped after **3 s** |
+| Fallbacks | whole trip capped at **120 s**; same destination cools down for **200 ticks**; after the exit anchor it chases the destination for up to **10 s** (arrives within 3 blocks) |
+| Segment occupancy | runtime table, refreshed every **10 ticks**, entries expire after **10 s** |
+| Queuing | retried every **10 ticks**; after **5 s** waiting the resident is teleported across the blocked segment |
+| Recipes | path brush = stick + iron nugget; debug wand = 2 sticks |
+
 ## Combat
 
 | | |

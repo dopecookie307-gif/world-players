@@ -32,6 +32,21 @@ public final class ResidentJobs {
     public static final String CRAFTING = "crafting";
     /** 临时工作状态：正在通勤（调试棒/以后的工作指派设置，目的地名字见 {@code ResidentEntity#destinationKey}）。 */
     public static final String COMMUTE = "commute";
+    /**
+     * 路网排队（第三轮，2026-11-24）：前面那段路被别的居民占着，在段口的节点上等通行。
+     *
+     * <p>只是赶路内部的临时状态（底下那行仍显示目的地），不是新的手册模式。</p>
+     */
+    public static final String WAITING = "waiting";
+    /**
+     * 自订区域（2026-11-25）：没有固定文案的工作状态占位。
+     *
+     * <p>真实显示的是员工所工作区域里玩家写下的文字（见 {@link #literal(String)}）；
+     * 文字为空时才退回这个词条（「工作」）。</p>
+     */
+    public static final String CUSTOM = "custom";
+    /** 自定义状态文字的前缀：{@code text:<文字>} 直接原样显示，不走翻译表。 */
+    public static final String LITERAL_PREFIX = "text:";
     /** 工作区员工：农田里干活（工作地点名字见 {@code ResidentEntity#destinationKey}）。 */
     public static final String FARMING = "farming";
     /**
@@ -117,6 +132,10 @@ public final class ResidentJobs {
         if (WorkZone.TYPE_FILL.equals(zoneType)) {
             return FILLER;
         }
+        if (WorkZone.TYPE_CUSTOM.equals(zoneType)) {
+            // 自订区域没有固定工作内容；真实显示的文字由工作 goal 用 literal(...) 写进去
+            return CUSTOM;
+        }
         return FARMING;
     }
 
@@ -130,6 +149,8 @@ public final class ResidentJobs {
         register(STAND, "job.worldplayers.stand");
         register(CRAFTING, "job.worldplayers.crafting");
         register(COMMUTE, "job.worldplayers.commute");
+        register(WAITING, "job.worldplayers.waiting");
+        register(CUSTOM, "job.worldplayers.custom");
         register(FARMING, "job.worldplayers.farming");
         register(FARMING_PAUSED, "job.worldplayers.farming_paused");
         register(HANDLING_BAG, "job.worldplayers.handling_bag");
@@ -157,11 +178,27 @@ public final class ResidentJobs {
 
     /** 状态 id → 可直接显示的文字。没登记的 id 回退成 {@code job.worldplayers.<id>}。 */
     public static Component text(String id) {
+        // 自订区域（2026-11-25）：玩家写的「工作状态」文字直接显示，不查翻译表
+        if (isLiteral(id)) {
+            String raw = id.substring(LITERAL_PREFIX.length());
+            return raw.isBlank() ? Component.translatable("job.worldplayers.custom")
+                : Component.literal(raw);
+        }
         String key = id == null ? null : REGISTRY.get(id);
         if (key == null) {
             key = "job.worldplayers." + (id == null || id.isBlank() ? IDLE : id);
         }
         return Component.translatable(key);
+    }
+
+    /** 把玩家写的文字包成「直接显示」的状态 id（自订区域用）。 */
+    public static String literal(String text) {
+        return LITERAL_PREFIX + (text == null ? "" : text);
+    }
+
+    /** 这个状态 id 是不是「直接显示玩家文字」。 */
+    public static boolean isLiteral(@javax.annotation.Nullable String id) {
+        return id != null && id.startsWith(LITERAL_PREFIX);
     }
 
     private ResidentJobs() {

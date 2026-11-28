@@ -4,9 +4,10 @@
 
 A Minecraft **1.21.1** mod for **NeoForge**: residents built on the player model, with a player-style
 inventory, gear, experience repair, navigation and a full combat system. Since 0.3.0 they also
-mark out work areas, keep a daily schedule, and have mood, stamina and hunger.
+mark out work areas, keep a daily schedule, and have mood, stamina and hunger; since 0.3.1 they walk a
+**path network** you draw by hand, so they find their way between floors without a player escort.
 
-> **Status: v0.3.0** (2026-11-23). Playable, still evolving.
+> **Status: v0.3.1** (2026-11-28). Playable, still evolving.
 > Exact numbers live in [docs/MECHANICS.md](docs/MECHANICS.md); version history in [CHANGELOG.md](CHANGELOG.md).
 > 中文说明见 [README.zh-CN.md](README.zh-CN.md)。
 
@@ -41,7 +42,7 @@ mark out work areas, keep a daily schedule, and have mood, stamina and hunger.
 
 ### Work areas (0.3.0)
 - Plan a region with the manual (64-block ray, six faces, scroll to resize): **road, mine, fill, farm,
-  tree farm, ranch, fishery, entertainment, forbidden** — with colour, list/detail pages and scrolling.
+  tree farm, ranch, fishery, entertainment, forbidden, custom** — with colour, list/detail pages and scrolling.
 - Up to **5 employees** per area (fishery: **1**); selecting an area **takes its employees over** from others.
 - **Farm** — harvests mature crops, tills dirt, replants. **Farmer's Delight compatible: plants and
   harvests every crop, rice included.**
@@ -54,10 +55,24 @@ mark out work areas, keep a daily schedule, and have mood, stamina and hunger.
   bite, rolls vanilla fishing loot (lure / luck of the sea apply), re-checks water every cast.
 - **Entertainment** — 500-char description; residents visit during free time to recover mood.
 - **Forbidden** — residents never enter voluntarily; one already inside walks out.
+- **Custom** (0.3.1) — a blank-slate area with no fixed work: assign employees and they commute there by
+  area name, wander inside (or stand on the single standable spot), and show a **“Work status:”** line you
+  type on the detail page above their head. The text is saved on every keystroke.
+
+### Path network (0.3.1)
+- Draw a route with the **path brush**: left click cycles a spot through path point → anchor → delete,
+  right click links two points, Alt + scroll changes the action (walk / jump / climb ladder / teleport).
+  Points and segments render through blocks within 32 blocks while you hold the brush.
+- Residents pick the nearest same-level anchor, run Dijkstra over the segments and walk the route
+  themselves — no more escorting them up and down stairs, as long as every anchor is reachable.
+- Segments are **one-lane shared passages** by default: residents reserve them, **queue and wait**
+  instead of colliding head-on, and a 5 s deadlock fallback gets everyone through. Strolling avoids
+  the network, so nobody blocks a stairwell.
 
 ### Daily life (0.3.0)
 - **Schedule**: work (10 min) → free time (10 min with a job, 20 without) → wandering →
-  nearest entertainment area → bed. Follow / Stand / inventory freeze all timers.
+  nearest entertainment area → bed. Follow / Stand / inventory pause all timers; Follow / Stand also
+  **pause sleep** (the resident gets up, stamina stays, and the rest of the sleep resumes afterwards).
 - **Mood & stamina**: decay over time, affect work pacing and movement; work is doubled while both are >75 %.
 - **Hunger**: eats from the inventory, shares food with hungry neighbours, refuses raw meat.
 - **Beds**: bind a bed, **sleep until stamina is full** and wake with a mood bonus; residents without a

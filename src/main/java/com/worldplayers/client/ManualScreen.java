@@ -134,6 +134,8 @@ public class ManualScreen extends Screen {
     /** 侧边栏显示顺序（存的是栏位 id：0=区域选择，1=手册渲染）。 */
     private final int[] order = new int[TAB_COUNT];
     private int currentTab = TAB_REGION;
+    /** 初始页是否已经定过（窗口缩放会重新 init，不能每次都重置页签）。 */
+    private boolean tabInitialized;
 
     private boolean editMode;
 
@@ -233,6 +235,12 @@ public class ManualScreen extends Screen {
         if (this.pendingTab >= 0) {
             this.currentTab = this.pendingTab;
             this.pendingTab = -1;
+            this.tabInitialized = true;
+        } else if (!this.tabInitialized) {
+            // 默认打开**左侧边栏最顶端的栏位**（跟随玩家已编辑的顺序，草案 12.5）；
+            // 只在第一次 init 时定一次，窗口缩放不会把玩家翻到的页重置
+            this.currentTab = this.order[0];
+            this.tabInitialized = true;
         }
         if (this.pendingZoneType != null) {
             this.currentZoneType = this.pendingZoneType;
@@ -498,6 +506,8 @@ public class ManualScreen extends Screen {
                         "gui.worldplayers.zone.type.fill.tooltip";
                     case com.worldplayers.resident.WorkZone.TYPE_ENTERTAINMENT ->
                         "gui.worldplayers.zone.type.entertainment.tooltip";
+                    case com.worldplayers.resident.WorkZone.TYPE_CUSTOM ->
+                        "gui.worldplayers.zone.type.custom.tooltip";
                     case com.worldplayers.resident.WorkZone.TYPE_FORBIDDEN ->
                         "gui.worldplayers.zone.type.forbidden.tooltip";
                     default -> null;
@@ -1228,6 +1238,10 @@ public class ManualScreen extends Screen {
             // 娱乐区域（14 号文档 1.2）：唱片 cat
             return new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.MUSIC_DISC_CAT);
         }
+        if (com.worldplayers.resident.WorkZone.TYPE_CUSTOM.equals(type)) {
+            // 自订区域（2026-11-25 主人指定）：白纸
+            return new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.PAPER);
+        }
         if (com.worldplayers.resident.WorkZone.TYPE_MINE.equals(type)) {
             // 挖掘工程（主人 2026-11-22 指定：铁铲图标）
             return new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.IRON_SHOVEL);
@@ -1258,6 +1272,9 @@ public class ManualScreen extends Screen {
         }
         if (com.worldplayers.resident.WorkZone.TYPE_ENTERTAINMENT.equals(type)) {
             return "gui.worldplayers.zone.type.entertainment";
+        }
+        if (com.worldplayers.resident.WorkZone.TYPE_CUSTOM.equals(type)) {
+            return "gui.worldplayers.zone.type.custom";
         }
         if (com.worldplayers.resident.WorkZone.TYPE_MINE.equals(type)) {
             return "gui.worldplayers.zone.type.mine";

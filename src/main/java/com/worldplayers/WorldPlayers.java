@@ -14,7 +14,6 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.entity.EntityAttributeCreationEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.slf4j.Logger;
@@ -31,9 +30,10 @@ public class WorldPlayers {
         WPEntities.ENTITY_TYPES.register(modEventBus);
         WPItems.ITEMS.register(modEventBus);
         WPMenus.MENUS.register(modEventBus);
+        // WP 独立创造物品栏（v0.3.1：路径笔等物品统一放这里）
+        com.worldplayers.registry.WPCreativeTabs.TABS.register(modEventBus);
         modEventBus.addListener(WorldPlayers::onCommonSetup);
         modEventBus.addListener(WorldPlayers::onEntityAttributes);
-        modEventBus.addListener(WorldPlayers::onCreativeTabContents);
         modEventBus.addListener(WorldPlayers::onRegisterPayloads);
         // 客户端配置：手册页面里的勾选项直接改这里（手持手册时的渲染开关）
         modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.CLIENT,
@@ -94,6 +94,11 @@ public class WorldPlayers {
                 com.worldplayers.resident.WorkZoneData.get(player.serverLevel());
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                 player, new com.worldplayers.network.ZoneListPayload(data.zones()));
+            // 路径网（v0.3.1）：登录先发一整张，之后每次改动再广播
+            com.worldplayers.resident.path.PathNetworkData pathNet =
+                com.worldplayers.resident.path.PathNetworkData.get(player.serverLevel());
+            net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
+                player, new com.worldplayers.network.PathSyncPayload(pathNet.nodes(), pathNet.segments()));
             // 成员列表（成员列表页 / 绑定床铺模式判断床归属）
             com.worldplayers.resident.BedBinder.syncAll(player.server);
             // 招募消耗数量（手册按钮的悬浮提示要按服务端配置浮动）
@@ -187,16 +192,6 @@ public class WorldPlayers {
         event.put(WPEntities.RESIDENT.get(), ResidentEntity.createAttributes().build());
     }
 
-    private static void onCreativeTabContents(BuildCreativeModeTabContentsEvent event) {
-        if (event.getTabKey() == CreativeModeTabs.SPAWN_EGGS) {
-            event.accept(WPItems.RESIDENT_SPAWN_EGG.get());
-        }
-        if (event.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
-            event.accept(WPItems.RESIDENT_MANUAL.get());
-            event.accept(WPItems.RESIDENT_WAND.get());
-        }
-    }
-
     private static void onRegisterPayloads(RegisterPayloadHandlersEvent event) {
         event.registrar("1")
             .playToServer(
@@ -260,6 +255,10 @@ public class WorldPlayers {
             .playToServer(com.worldplayers.network.ZoneDescriptionPayload.TYPE,
                 com.worldplayers.network.ZoneDescriptionPayload.STREAM_CODEC,
                 com.worldplayers.network.ZoneDescriptionPayload::handle)
+            // 自订区域「工作状态」文字（2026-11-25）：关闭页面即整份覆盖
+            .playToServer(com.worldplayers.network.ZoneStatusTextPayload.TYPE,
+                com.worldplayers.network.ZoneStatusTextPayload.STREAM_CODEC,
+                com.worldplayers.network.ZoneStatusTextPayload::handle)
             // 挖掘 / 填充工程（v0.2.15）：勾叉 / 改方块 + 进度同步
             .playToServer(com.worldplayers.network.ZoneProjectPayload.TYPE,
                 com.worldplayers.network.ZoneProjectPayload.STREAM_CODEC,
@@ -276,6 +275,15 @@ public class WorldPlayers {
             .playToServer(
                 com.worldplayers.network.WandClickPayload.TYPE,
                 com.worldplayers.network.WandClickPayload.STREAM_CODEC,
-                com.worldplayers.network.WandClickPayload::handle);
+                com.worldplayers.network.WandClickPayload::handle)
+            // 路径网（v0.3.1 第一轮）：整张网同步 + 路径笔编辑请求
+            .playToClient(
+                com.worldplayers.network.PathSyncPayload.TYPE,
+                com.worldplayers.network.PathSyncPayload.STREAM_CODEC,
+                com.worldplayers.network.PathSyncPayload::handle)
+            .playToServer(
+                com.worldplayers.network.PathEditPayload.TYPE,
+                com.worldplayers.network.PathEditPayload.STREAM_CODEC,
+                com.worldplayers.network.PathEditPayload::handle);
     }
 }

@@ -3,6 +3,7 @@ package com.worldplayers.resident.ai;
 import com.worldplayers.resident.ColonyAnchors;
 import com.worldplayers.resident.ResidentEntity;
 import com.worldplayers.resident.ResidentJobs;
+import com.worldplayers.resident.path.PathNetworkData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
@@ -49,6 +50,11 @@ public class ResidentStrollGoal extends WaterAvoidingRandomStrollGoal {
         if (this.resident.level() instanceof ServerLevel level && !withinRange(level)) {
             return false;
         }
+        // 路网第三轮（2026-11-24）：**不在路段上逗留**。站在窄楼梯 / 走廊中间闲逛，
+        // 会把正在赶路的居民挡在段口（主人要的「一楼十户同时下楼不推挤」）。
+        if (this.resident.level() instanceof ServerLevel level && onTravelLane(level)) {
+            return false;
+        }
         return super.canUse();
     }
 
@@ -67,6 +73,9 @@ public class ResidentStrollGoal extends WaterAvoidingRandomStrollGoal {
         if (this.resident.level() instanceof ServerLevel level && !withinRange(level)) {
             return false;
         }
+        if (this.resident.level() instanceof ServerLevel level && onTravelLane(level)) {
+            return false;
+        }
         return super.canContinueToUse();
     }
 
@@ -78,19 +87,37 @@ public class ResidentStrollGoal extends WaterAvoidingRandomStrollGoal {
         }
         boolean colony = ColonyAnchors.hasColony(level);
         BlockPos personal = colony ? null : ColonyAnchors.personalAnchor(this.resident);
+        PathNetworkData pathData = PathNetworkData.get(level);
         for (int i = 0; i < TARGET_TRIES; i++) {
             Vec3 candidate = super.getPosition();
             if (candidate == null) {
                 return null;
             }
-            if (colony
+            boolean inBounds = colony
                 ? ColonyAnchors.inside(level, candidate)
                 : candidate.distanceToSqr(Vec3.atCenterOf(personal))
-                    <= ColonyAnchors.PERSONAL_RANGE * ColonyAnchors.PERSONAL_RANGE) {
-                return candidate;
+                    <= ColonyAnchors.PERSONAL_RANGE * ColonyAnchors.PERSONAL_RANGE;
+            if (!inBounds) {
+                continue;
             }
+            // 第三轮：目的地点也避开路段（离段中心线 3 格内算「在路上」），别把人引到路中间去
+            if (pathData.isTravelLane(BlockPos.containing(candidate),
+                level.dimension().location())) {
+                continue;
+            }
+            return candidate;
         }
         return null;
+    }
+
+    /** 现在是不是正站在路网的路段中间（停靠点不算）。 */
+    private boolean onTravelLane(ServerLevel level) {
+        PathNetworkData data = PathNetworkData.get(level);
+        if (data.segments().isEmpty()) {
+            return false;
+        }
+        return data.isTravelLane(this.resident.blockPosition(),
+            level.dimension().location());
     }
 
     /** 现在还在不在「可以闲逛的范围」里。 */

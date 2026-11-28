@@ -131,6 +131,13 @@ public class ResidentWorkGoal extends Goal {
     private static final int SCAN_COOLDOWN_MAX = 40;
     /** 工具搜寻冷却：30 秒（主人 2026-11-21 定，所有工具共用）。 */
     private static final int TOOL_SEARCH_CD = 20 * 30;
+    /** 自订区域（2026-11-25）：每 6 秒扣 0.1 点体力（主人定）。 */
+    private static final int CUSTOM_STAMINA_INTERVAL = 20 * 6;
+    private static final float CUSTOM_STAMINA_COST = 0.1F;
+    /** 自订区域「可站格只有一格」的扫描节流（5 秒）。 */
+    private static final int CUSTOM_SCAN_INTERVAL = 100;
+    /** 区域体积超过这个数就不做「只有一格」的全扫（按多格处理，直接游荡）。 */
+    private static final long CUSTOM_SCAN_MAX_VOLUME = 32_768L;
     /** 数据包可加的「模组种子」逃生口（T11）。 */
     public static final TagKey<Item> PLANTABLE_SEEDS_TAG =
         TagKey.create(Registries.ITEM, WorldPlayers.id("plantable_seeds"));
@@ -158,6 +165,16 @@ public class ResidentWorkGoal extends Goal {
     private int scanCooldown;
     /** 工具搜寻冷却：每次真的翻背包找工具后，30 秒内不再翻（无论有没有）。 */
     private int toolSearchCd;
+    // ---- 自订区域（2026-11-25） ----
+    /** 「可站格只有一格」的扫描节流倒计时。 */
+    private int customScanCd;
+    /** 已经扫过这一轮（避免刚上班时每 tick 重扫）。 */
+    private boolean customOnlyKnown;
+    /** 区域里唯一的可站格；null = 不止一格 / 太大没扫 / 没有可站格。 */
+    @Nullable
+    private BlockPos customOnlySpot;
+    /** 自订区域扣体力的倒计时（6 秒）。 */
+    private int customStaminaCd;
     /** 上次翻背包找的工具种类与结果（冷却期间直接用）。 */
     @Nullable
     private ToolNeed toolCachedType;
@@ -330,6 +347,11 @@ public class ResidentWorkGoal extends Goal {
         this.lastProgressTick = 0L;
         this.ranch.reset();
         this.fishery.reset();
+        // 自订区域（2026-11-25）：每次上班重新判断「可站格只有一格」
+        this.customScanCd = 0;
+        this.customOnlyKnown = false;
+        this.customOnlySpot = null;
+        this.customStaminaCd = CUSTOM_STAMINA_INTERVAL;
         if (this.zone != null && this.zone.isTreeFarm()) {
             TreeFarmIndex.get(this.zone).forceRescan();
         }
@@ -401,7 +423,17 @@ public class ResidentWorkGoal extends Goal {
         }
 
         // 在工作区域里 → 「农作」等状态，底下不显示地点名字
-        this.applyMode(ResidentJobs.workJobFor(this.zone.type()), "");
+        // 自订区域（2026-11-25）：工作状态显示详情页里写下的文字（空 → 「工作」）
+        String job = ResidentJobs.workJobFor(this.zone.type());
+        if (this.zone.isCustom()) {
+            job = this.zone.statusText().isBlank()
+                ? ResidentJobs.CUSTOM : ResidentJobs.literal(this.zone.statusText());
+        }
+        this.applyMode(job, "");
+        // 进区之后恢复「日常基础移速」：通勤阶段的心情档加速只属于赶路，别带进区域内的踱步 / 干活
+        if (this.resident.tickCount % 20 == 0) {
+            this.resident.applyMovementSpeed(ResidentEntity.BASE_MOVEMENT_SPEED);
+        }
 
         // 2026-11-23 三修（主人：工作期间员工必须待在工作区）：寻路终点跑到区域外就立刻取消。
         // 以前只靠「栅栏门归属」拦门，员工追区域外的动物 / 绕路时还是会开门走出去。
@@ -417,6 +449,8 @@ public class ResidentWorkGoal extends Goal {
             this.ranch.tick(level, this.zone);
         } else if (this.zone.isFishery()) {
             this.fishery.tick(level, this.zone);
+        } else if (this.zone.isCustom()) {
+            this.tickCustom(level);
         } else {
             this.wander(level);
         }
@@ -453,6 +487,9 @@ public class ResidentWorkGoal extends Goal {
         this.workStarted = false;
         this.ranch.reset();
         this.fishery.reset();
+        this.customScanCd = 0;
+        this.customOnlyKnown = false;
+        this.customOnlySpot = null;
         this.zone = null;
     }
 
@@ -1904,6 +1941,86 @@ public class ResidentWorkGoal extends Goal {
         return this.resident.getNavigation().moveTo(x, y, z, speed);
     }
 
+    // ------------------------------------------------------------------
+    // 自订区域（2026-11-25，主人提出）
+    // ------------------------------------------------------------------
+
+    /**
+     * 自订区域的工作内容：**没有活**，只在区域里游荡 + 每 6 秒扣 0.1 体力点。
+     *
+     * <p>主人 2026-11-25 要求：</p>
+     * <ul>
+     *   <li>员工到区域后按普通工作区一样在区域内游荡；</li>
+     *   <li>区域里**可站方块只有一格**时，员工就站在那一格之内；</li>
+     *   <li>工作状态显示详情页里写下的文字（在 {@code tick} 里写，这里只负责体力与走位）。</li>
+     * </ul>
+     */
+    private void tickCustom(ServerLevel level) {
+        if (--this.customStaminaCd <= 0) {
+            this.customStaminaCd = CUSTOM_STAMINA_INTERVAL;
+            this.resident.setStamina(this.resident.stamina() - CUSTOM_STAMINA_COST);
+        }
+        BlockPos only = this.customOnlyStandSpot(level);
+        if (only == null) {
+            this.wander(level);
+            return;
+        }
+        // 只有一个能站的地方：走进去待着（已经在附近就别再挪）
+        if (this.resident.blockPosition().distSqr(only) > 4.0D) {
+            this.moveTo(only.getX() + 0.5D, only.getY(), only.getZ() + 0.5D, 0.9D);
+        } else if (!this.resident.getNavigation().isDone()) {
+            this.resident.getNavigation().stop();
+        }
+    }
+
+    /** 区域里唯一的可站格（缓存 5 秒）；不止一格 / 太大 / 没有 → null。 */
+    @Nullable
+    private BlockPos customOnlyStandSpot(ServerLevel level) {
+        if (this.zone == null) {
+            return null;
+        }
+        if (!this.customOnlyKnown || this.customScanCd-- <= 0) {
+            this.customOnlyKnown = true;
+            this.customScanCd = CUSTOM_SCAN_INTERVAL;
+            this.customOnlySpot = findOnlyStandSpot(level, this.zone);
+        }
+        return this.customOnlySpot;
+    }
+
+    /**
+     * 扫整个区域找「可站的位置」：找到第二个就返回 null（= 不是只有一格）。
+     *
+     * <p>口径和 {@link #wander} 一致：区域方块本身能站就站，否则试它上面一格
+     * （区域只框了地面一层时，真正能站的是上面那一格）。</p>
+     */
+    @Nullable
+    private BlockPos findOnlyStandSpot(ServerLevel level, WorkZone work) {
+        if (work.volume() > CUSTOM_SCAN_MAX_VOLUME) {
+            return null;
+        }
+        BlockPos only = null;
+        for (int x = work.min().getX(); x <= work.max().getX(); x++) {
+            for (int z = work.min().getZ(); z <= work.max().getZ(); z++) {
+                for (int y = work.max().getY() + 1; y >= work.min().getY(); y--) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    BlockPos stand = ResidentEntity.isSafeStand(level, pos) ? pos
+                        : ResidentEntity.isSafeStand(level, pos.above()) ? pos.above() : null;
+                    if (stand == null
+                            || !(work.inWorkRange(stand) || work.inWorkRange(stand.below()))) {
+                        continue;
+                    }
+                    if (only != null) {
+                        // 已经有一个了，又找到第二个 → 不是「只有一格」
+                        return null;
+                    }
+                    only = stand.immutable();
+                    break;
+                }
+            }
+        }
+        return only;
+    }
+
     void wander(ServerLevel level) {
         if (--this.cooldown > 0) {
             return;
@@ -1962,9 +2079,11 @@ public class ResidentWorkGoal extends Goal {
             this.commuteSpotAge = 0;
         }
         if (this.commuteSpot != null) {
+            // 通勤速度走心情 / 体力档（2026-11-24 主人定稿，方案 A；和路网赶路、调试棒通勤同一套）
+            this.resident.applyTravelSpeed();
             this.moveTo(
                 this.commuteSpot.getX() + 0.5D, this.commuteSpot.getY(),
-                this.commuteSpot.getZ() + 0.5D, 0.9D);
+                this.commuteSpot.getZ() + 0.5D, 1.0D);
         }
     }
 

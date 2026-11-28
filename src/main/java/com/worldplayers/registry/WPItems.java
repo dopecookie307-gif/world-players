@@ -28,6 +28,14 @@ public final class WPItems {
     public static final DeferredItem<Item> RESIDENT_WAND = ITEMS.register("resident_wand",
         () -> new ResidentWandItem(new Item.Properties().stacksTo(1)));
 
+    /**
+     * 路径笔（路径网第一轮，2026-11-24）：画锚点 / 路径点，手持时渲染 32 格内的路网。
+     *
+     * <p>临时用**木棍**的模型（草案 12.2），以后换专属贴图。</p>
+     */
+    public static final DeferredItem<Item> PATH_BRUSH = ITEMS.register("path_brush",
+        () -> new com.worldplayers.item.PathBrushItem(new Item.Properties().stacksTo(1)));
+
     private WPItems() {
     }
 }

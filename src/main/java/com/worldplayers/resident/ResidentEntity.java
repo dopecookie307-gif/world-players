@@ -223,6 +223,7 @@ public class ResidentEntity extends PathfinderMob {
 
     /** 游荡基础速度（属性值）：和 {@code createAttributes} 里注册的一致。 */
     public static final double BASE_MOVEMENT_SPEED = 0.28D;
+
     /**
      * 玩家步行 4.317 格/秒对应的居民属性值。
      *
@@ -309,8 +310,7 @@ public class ResidentEntity extends PathfinderMob {
         return this.schedule;
     }
 
-    /** 心情档位 → 通勤速度：红（&lt;50）步行 75%、黄（50~75）4 格/秒、绿（&gt;=75）5 格/秒。 */
-    public static double moodMovementSpeed(float mood) {
+    /** 心情档位 → 通勤速度：红（&lt;50）步行 75%、黄（50~75）4 格/秒、绿（&gt;=75）5 格/秒。 */    public static double moodMovementSpeed(float mood) {
         if (mood >= 75.0F) {
             return SPRINT_MOVEMENT_SPEED;
         }
@@ -386,6 +386,11 @@ public class ResidentEntity extends PathfinderMob {
         this.goalSelector.addGoal(1, new com.worldplayers.resident.ai.ResidentOpenDoorGoal(this));
         // 战斗中优先级最高：一个 goal 统管近战/远程切换（6 格切近战、远了用弓弩）
         this.goalSelector.addGoal(1, new com.worldplayers.resident.ai.ResidentCombatGoal(this));
+        // 路网赶路（第二轮，2026-11-24）：去远处时先走路网、最后几格交还原版。
+        // 必须**注册在通勤 goal 之前**；两个 goal 同为优先级 2、谁也顶不掉谁，
+        // 所以通勤 goal 会在 canUse 里问 pathNetGoal.handlesTrip() 主动让路（0.3.1-alpha.5）。
+        this.pathNetGoal = new com.worldplayers.resident.ai.ResidentPathNetGoal(this);
+        this.goalSelector.addGoal(2, this.pathNetGoal);
         // 通勤（调试棒/以后的工作指派）：战斗优先，打完了继续走
         this.goalSelector.addGoal(2, new com.worldplayers.resident.ai.ResidentCommuteGoal(this));
         // 跟随模式：狼狗那种跟法，离太远直接传送到身边的安全方块
@@ -1722,6 +1727,15 @@ public class ResidentEntity extends PathfinderMob {
         if (JOB_IDLE.equals(job)) {
             this.workSite = null;
         }
+        // 切模式时**立刻**清掉临时状态与目的地：否则浮窗会继续显示「通勤」等旧状态
+        // （2026-11-24 主人报：切到跟随后人跟上了，工作状态却不切换）。
+        if (!JOB_IDLE.equals(job)) {
+            this.setActivity(null);
+            this.entityData.set(DATA_DESTINATION, "");
+        } else if (this.commuteTarget != null) {
+            // 切回自由活动：通勤目标还在，把目的地的显示补回来，接着走
+            this.entityData.set(DATA_DESTINATION, this.destination);
+        }
         // 站立 = 站岗：进模式时记住"站哪儿"，去援助/被推走之后靠这个点回去（主人 2026-11-20）
         if (JOB_STAND.equals(job)) {
             if (this.standHome == null) {
@@ -1821,6 +1835,24 @@ public class ResidentEntity extends PathfinderMob {
     /** 目的地显示名（"调试棒"、以后是工作区域名）。 */
     private String destination = "";
 
+    /** 是不是正在「路网赶路」（{@code ResidentPathNetGoal} 维护；浮窗 / 诊断 / 让路判断用）。 */
+    private boolean pathTripActive;
+
+    /** 路网赶路 goal 的实例（通勤 goal 要问它「这一趟该不该走路网」）。 */
+    private com.worldplayers.resident.ai.ResidentPathNetGoal pathNetGoal;
+
+    public com.worldplayers.resident.ai.ResidentPathNetGoal pathNetGoal() {
+        return this.pathNetGoal;
+    }
+
+    public boolean pathTripActive() {
+        return this.pathTripActive;
+    }
+
+    public void setPathTripActive(boolean active) {
+        this.pathTripActive = active;
+    }
+
     /** 下达通勤指令：目的地 + 浮窗显示的名字，同时把临时工作状态切成「通勤」。 */
     public void setCommuteTarget(net.minecraft.core.BlockPos pos, String destination) {
         this.commuteTarget = pos;
@@ -1892,7 +1924,8 @@ public class ResidentEntity extends PathfinderMob {
     /** 离开工作区：把临时工作状态与地点清掉，回到 {@link #jobKey()}（通常是闲逛）。 */
     public void clearWorkActivity() {
         String activity = this.activityKey();
-        if (WORK_ACTIVITIES.contains(activity)) {
+        // 自订区域（2026-11-25）：状态是玩家写的字面量文字，不在白名单里也要清
+        if (WORK_ACTIVITIES.contains(activity) || ResidentJobs.isLiteral(activity)) {
             this.setActivity(null);
             this.entityData.set(DATA_DESTINATION, "");
         }
@@ -1926,6 +1959,16 @@ public class ResidentEntity extends PathfinderMob {
     /** 按「期望速度 + 当前进食状态」重算一次属性（进食开始/结束时调用）。 */
     public void refreshMovementSpeed() {
         this.applyMovementSpeed(this.wantedMovementSpeed);
+    }
+
+    /**
+     * 把移动速度设成**心情 / 体力档**（两者取慢、饥饿 ≤30% 再封顶）。
+     *
+     * <p>2026-11-24 主人定稿（方案 A）：**路网赶路、通勤、战斗**都走这一档，统一口径；
+     * 调用方给 {@code moveTo} 的倍率按各自场景（走路 1.0、战斗追击 1.15）。</p>
+     */
+    public void applyTravelSpeed() {
+        this.applyMovementSpeed(moodMovementSpeed(this.mood()));
     }
 
     private void pinSkin(ServerLevel level) {
